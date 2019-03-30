@@ -1,3 +1,6 @@
+#### 2.9.3
+* under development
+
 #### 2.9.2 - 02-2019
 * Fix PreserveEndOfLine introduces additional newlines. [#360](https://github.com/fsprojects/fantomas/issues/360)
 * Fix Extra newline is introduced when file ends with multiline comment. [#363](https://github.com/fsprojects/fantomas/issues/363)
