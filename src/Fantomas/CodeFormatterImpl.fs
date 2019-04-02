@@ -371,7 +371,7 @@ let formatWith ast formatContext config =
     // Sometimes F# parser gives a partial AST for incorrect input
     if input.IsSome && String.IsNullOrWhiteSpace normalizedSourceCode <> String.IsNullOrWhiteSpace formattedSourceCode then
         raise <| FormatException "Incomplete code fragment which is most likely due to parsing errors or the use of F# constructs newer than supported."
-    else "Hello! " + formattedSourceCode
+    else formattedSourceCode
     
     |> String.removeTrailingSpaces
 
