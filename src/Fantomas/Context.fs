@@ -6,8 +6,8 @@ open System.Collections.Generic
 open System.CodeDom.Compiler
 open FSharp.Compiler.Range
 open Fantomas.FormatConfig
-open Fantomas.TokenMatcher
 open Fantomas.Trivia
+open Fantomas.TriviaTypes
 
 /// Wrapping IndentedTextWriter with current column position
 type ColumnIndentedTextWriter(tw : TextWriter, ?isDummy) =
@@ -73,7 +73,7 @@ type internal Context =
       /// Compiler directives attached to appropriate locations
       Directives : Dictionary<pos, string>
       Trivia : Dictionary<AstTransformer.FsAstNode, TriviaNode list>
-      TriviaIndexes : list<AstTransformer.FsAstNode * Trivia.TriviaIndex> //TODO: use PersistentHashMap
+      TriviaIndexes : list<AstTransformer.FsAstNode * TriviaTypes.TriviaIndex> //TODO: use PersistentHashMap
       NodePath : AstTransformer.FsAstNode list}
 
     /// Initialize with a string writer and use space as delimiter
@@ -85,21 +85,22 @@ type internal Context =
           Directives = Dictionary(); Trivia = Dictionary(); TriviaIndexes = [];
           NodePath = [] }
 
-    static member create config (content : string) maybeAst =
+    static member create config defines (content : string) maybeAst =
         let content = String.normalizeNewLine content
         let positions = 
             content.Split('\n')
             |> Seq.map (fun s -> String.length s + 1)
             |> Seq.scan (+) 0
             |> Seq.toArray
-        let (comments, directives, _) = filterCommentsAndDirectives content
+        //let (comments, directives, _) = filterCommentsAndDirectives content
+        let tokens = TokenParser.tokenize defines content
         let trivia =
-            maybeAst |> Option.map (fun ast -> Trivia.collectTrivia content ast)
+            maybeAst |> Option.map (Trivia.collectTrivia tokens)
             |> Option.defaultValue Context.Default.Trivia
 
         { Context.Default with 
             Config = config; Content = content; Positions = positions; 
-            Comments = comments; Directives = directives; Trivia = trivia }
+            Comments = null; Directives = null; Trivia = trivia }
 
     member x.CurrentNode = x.NodePath |> List.tryHead
     
@@ -444,8 +445,9 @@ let internal increaseTriviaIndex node (deltaBefore, deltaAfter) (ctx: Context) =
 
 let internal printComment c =
     match c with
-    | XmlLineComment s -> !- "///" -- s +> sepNln
-    | LineComment s -> !- "//" -- s +> sepNln
+    // | XmlComment s -> !- "///" -- s +> sepNln
+    | LineCommentAfterSourceCode s
+    | LineCommentOnSingleLine s -> !- s +> sepNln
     | BlockComment s -> !- "(*" -- s -- "*)"
 
 let internal printCommentsBefore node (ctx: Context) =
