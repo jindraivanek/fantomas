@@ -1,3 +1,19 @@
+#### 3.0.0-beta-004 - 09/2019
+* Restructured library API
+* Improved performance
+
+#### 3.0.0-beta-003 - 09/2019
+* More trivia fixes
+* FCS 31
+
+#### 3.0.0-beta-002 - 07/2019
+* More fixes with hash directives
+
+#### 3.0.0-beta-001 - 07/2019
+* Use FCS 28.0.0 and net461. [#436](https://github.com/fsprojects/fantomas/pull/436)
+* Deprecated `PreserveEndOfLine` setting in favor of Trivia. [#434](https://github.com/fsprojects/fantomas/pull/434)
+* Added support for formatting multiple code path in defines.
+
 #### 2.9.2 - 02-2019
 * Fix PreserveEndOfLine introduces additional newlines. [#360](https://github.com/fsprojects/fantomas/issues/360)
 * Fix Extra newline is introduced when file ends with multiline comment. [#363](https://github.com/fsprojects/fantomas/issues/363)

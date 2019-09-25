@@ -1,11 +1,18 @@
 module Fantomas.TriviaTypes
 
+open FSharp.Compiler.SourceCodeServices
 open FSharp.Compiler.Range
+
+type Token =
+    { TokenInfo:FSharpTokenInfo
+      LineNumber: int
+      Content: string }
+
 
 type Comment =
     | LineCommentAfterSourceCode of comment:string
     | LineCommentOnSingleLine of comment:string
-    | BlockComment of string
+    | BlockComment of string * newlineBefore:bool * newlineAfter:bool
     
 (* LineComment Examples
 
@@ -18,11 +25,17 @@ let a = 7
 
 => LineCommentOnSingleLine("// meh", false)
 *)
-    
+
 type TriviaContent =
-    | Keyword of string
+    | Keyword of Token
+    | Number of string
+    | StringContent of string
+    | IdentOperatorAsWord of string
+    | IdentBetweenTicks of string
     | Comment of Comment
     | Newline
+    | Directive of directive:string
+    | NewlineAfter
     
 type Trivia =
     { Item: TriviaContent
@@ -34,13 +47,12 @@ with
 type TriviaIndex = TriviaIndex of int * int
 
 type TriviaNodeType =
-    | MainNode
-//    | Keyword of string
-//    | Token of string
+    | MainNode of ``type``:string
+    | Token of Token
     
-type TriviaNode = {
-    Type: TriviaNodeType
-    CommentsBefore: Comment list
-    CommentsAfter: Comment list
-    NewlinesBefore: int
-}
+type TriviaNode =
+  { Type: TriviaNodeType
+    ContentBefore: TriviaContent list
+    ContentItself: TriviaContent option
+    ContentAfter: TriviaContent list
+    Range: range }

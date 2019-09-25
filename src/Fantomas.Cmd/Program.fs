@@ -3,7 +3,6 @@
 open System
 open System.IO
 open Microsoft.FSharp.Text.Args
-
 open Fantomas
 open Fantomas.FormatConfig
 
@@ -27,20 +26,17 @@ open Fantomas.FormatConfig
 //  [+|-]spaceAfterSemiColon        Enable/disable spaces after semicolons (default = true)
 //  [+|-]indentOnTryWith            Enable/disable indentation on try/with block (default = false)
 //  [+|-]reorderOpenDeclaration     Enable/disable indentation on try/with block (default = false)
+//  [+|-]keepNewlineAfter           Enable/disable extra newline when found in sourceText (default = false)
 
 let [<Literal>] forceText = "Print the source unchanged if it cannot be parsed correctly."
 let [<Literal>] recurseText = "Process the input folder recursively."
 let [<Literal>] outputText = "Give a valid path for files/folders. Files should have .fs, .fsx, .fsi, .ml or .mli extension only."
 let [<Literal>] profileText = "Print performance profiling information."
-
 let [<Literal>] fsiText = "Read F# source from stdin as F# signatures."
 let [<Literal>] stdInText = "Read F# source from standard input."
 let [<Literal>] stdOutText = " Write the formatted source code to standard output."
-
 let [<Literal>] indentText = "Set number of spaces for indentation (default = 4). The value should be between 1 and 10."
 let [<Literal>] widthText = "Set the column where we break to new lines (default = 80). The value should be at least 60."
-
-let [<Literal>] preserveEOLText = "Preserve original end of lines, disables auto insert/remove of blank lines (default = false)"
 let [<Literal>] semicolonEOLText = "Enable semicolons at the end of line (default = false)."
 let [<Literal>] argumentText = "Disable spaces before the first argument of functions when there are parenthesis (default = true). For methods and constructors, there are never spaces regardless of this option."
 let [<Literal>] colonText = "Disable spaces before colons (default = true)."
@@ -48,8 +44,8 @@ let [<Literal>] commaText = "Disable spaces after commas (default = true)."
 let [<Literal>] semicolonText = "Disable spaces after semicolons (default = true)."
 let [<Literal>] indentOnTryWithText = "Enable indentation on try/with block (default = false)."
 let [<Literal>] reorderOpenDeclarationText = "Enable reordering open declarations (default = false)."
-
 let [<Literal>] spaceAroundDelimiterText = "Disable spaces after starting and before ending of lists, arrays, sequences and records (default = true)."
+let [<Literal>] keepNewlineAfterText = "Keep newlines found after = in let bindings, -> in pattern matching and chained function calls."
 let [<Literal>] strictModeText = "Enable strict mode (ignoring directives and comments and printing literals in canonical forms) (default = false)."
 
 let time f =
@@ -84,14 +80,28 @@ let rec allFiles isRec path =
     |> Seq.filter (fun f -> isFSharpFile f && not (f.Contains(obj)))
 
 /// Format a source string using given config and write to a text writer
-let processSourceString isFsiFile s (tw : TextWriter) config =
+let processSourceString isFsiFile s (tw : Choice<TextWriter, string>) config =
     let fileName = if isFsiFile then "/tmp.fsi" else "/tmp.fsx"
-    tw.Write(CodeFormatter.FormatDocument(fileName, s, config))
+    async {
+        let! formatted = CodeFormatter.FormatDocumentAsync(fileName, SourceOrigin.SourceString s, config,
+                                                           FakeHelpers.createParsingOptionsFromFile fileName,
+                                                           FakeHelpers.sharedChecker.Value)
+        match tw with
+        | Choice1Of2 tw -> tw.Write(formatted)
+        | Choice2Of2 path -> File.WriteAllText(path, formatted)
+    }
+    |> Async.RunSynchronously
 
 /// Format inFile and write to text writer
 let processSourceFile inFile (tw : TextWriter) config = 
     let s = File.ReadAllText(inFile)
-    tw.Write(CodeFormatter.FormatDocument(inFile, s, config))
+    async {
+        let! formatted = CodeFormatter.FormatDocumentAsync(inFile, SourceOrigin.SourceString s, config,
+                                                           FakeHelpers.createParsingOptionsFromFile inFile,
+                                                           FakeHelpers.sharedChecker.Value)
+        tw.Write(formatted)
+    }
+    |> Async.RunSynchronously
 
 [<EntryPoint>]
 let main _args =
@@ -105,21 +115,20 @@ let main _args =
     let fsi = ref false
     let stdIn = ref false
     let stdOut = ref false
-    
-    let indent = ref 4
-    let pageWidth = ref 80
-    
-    let preserveEOL = ref false
-    let semicolonEOL = ref false
-    let spaceBeforeArgument = ref true
-    let spaceBeforeColon = ref true
-    let spaceAfterComma = ref true
-    let spaceAfterSemiColon = ref true
-    let indentOnTryWith = ref false
-    let reorderOpenDeclaration = ref false
 
-    let spaceAroundDelimiter = ref true
-    let strictMode = ref false
+    let indent = ref FormatConfig.Default.IndentSpaceNum
+    let pageWidth = ref FormatConfig.Default.PageWidth
+
+    let semicolonEOL = ref FormatConfig.Default.SemicolonAtEndOfLine
+    let spaceBeforeArgument = ref FormatConfig.Default.SpaceBeforeArgument
+    let spaceBeforeColon = ref FormatConfig.Default.SpaceBeforeColon
+    let spaceAfterComma = ref FormatConfig.Default.SpaceAfterComma
+    let spaceAfterSemiColon = ref FormatConfig.Default.SpaceAfterSemicolon
+    let indentOnTryWith = ref FormatConfig.Default.IndentOnTryWith
+    let reorderOpenDeclaration = ref FormatConfig.Default.ReorderOpenDeclaration
+    let spaceAroundDelimiter = ref FormatConfig.Default.SpaceAroundDelimiter
+    let keepNewlineAfter = ref FormatConfig.Default.KeepNewlineAfter
+    let strictMode = ref FormatConfig.Default.StrictMode
 
     let handleOutput s =
         if not !stdOut then
@@ -186,13 +195,11 @@ let main _args =
 
     let stringToFile (s : string) (outFile : string) config =
         try
-            use buffer = new StreamWriter(outFile)
             if !profile then
                 printfn "Line count: %i" (s.Length - s.Replace(Environment.NewLine, "").Length)
-                time (fun () -> processSourceString !fsi s buffer config)
+                time (fun () -> processSourceString !fsi s (Choice2Of2 outFile) config)
             else
-                processSourceString !fsi s buffer config
-            buffer.Flush()
+                processSourceString !fsi s (Choice2Of2 outFile) config
             printfn "%s has been written." outFile
         with
         | exn ->
@@ -203,8 +210,8 @@ let main _args =
 
     let stringToStdOut s config =
         try
-            use buffer = new StringWriter()
-            processSourceString !fsi s buffer config
+            use buffer = new StringWriter() :> TextWriter
+            processSourceString !fsi s (Choice1Of2 buffer) config
             stdout.Write(buffer.ToString())
         with
         | exn ->
@@ -227,7 +234,6 @@ let main _args =
            ArgInfo("--indent", ArgType.Int handleIndent, indentText);
            ArgInfo("--pageWidth", ArgType.Int handlePageWidth, widthText);
            
-           ArgInfo("--preserveEOL", ArgType.Set preserveEOL, preserveEOLText)
            ArgInfo("--semicolonEOL", ArgType.Set semicolonEOL, semicolonEOLText);
            ArgInfo("--noSpaceBeforeArgument", ArgType.Clear spaceBeforeArgument, argumentText);
            ArgInfo("--noSpaceBeforeColon", ArgType.Clear spaceBeforeColon, colonText);
@@ -235,17 +241,17 @@ let main _args =
            ArgInfo("--noSpaceAfterSemiColon", ArgType.Clear spaceAfterSemiColon, semicolonText);
            ArgInfo("--indentOnTryWith", ArgType.Set indentOnTryWith, indentOnTryWithText);
            ArgInfo("--reorderOpenDeclaration", ArgType.Set reorderOpenDeclaration, reorderOpenDeclarationText);
-           
+
            ArgInfo("--noSpaceAroundDelimiter", ArgType.Clear spaceAroundDelimiter, spaceAroundDelimiterText);
+           ArgInfo("--keepNewlineAfter", ArgType.Set keepNewlineAfter, keepNewlineAfterText);
            ArgInfo("--strictMode", ArgType.Set strictMode, strictModeText) |]
 
-    ArgParser.Parse(options, handleInput, "Fantomas <input_path>")
+    ArgParser.Parse(options, handleInput, sprintf "Fantomas <input_path>%sCheck out https://github.com/fsprojects/fantomas/blob/master/docs/Documentation.md#using-the-command-line-tool for more info." Environment.NewLine )
 
     let config =
         { FormatConfig.Default with 
             IndentSpaceNum = !indent;
             PageWidth = !pageWidth;
-            PreserveEndOfLine = !preserveEOL;
             SemicolonAtEndOfLine = !semicolonEOL; 
             SpaceBeforeArgument = !spaceBeforeArgument; 
             SpaceBeforeColon = !spaceBeforeColon;
@@ -254,7 +260,8 @@ let main _args =
             IndentOnTryWith = !indentOnTryWith;
             ReorderOpenDeclaration = !reorderOpenDeclaration
             SpaceAroundDelimiter = !spaceAroundDelimiter
-            StrictMode = !strictMode }
+            StrictMode = !strictMode
+            KeepNewlineAfter = !keepNewlineAfter }
 
     // Handle inputs via pipeline
     let isKeyAvailable = ref false
