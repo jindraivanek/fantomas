@@ -1,4 +1,5 @@
-image: gitpod/workspace-dotnet
+image:
+  file: .gitpod.dockerfile
 
 tasks:
   - init: dotnet tool install --tool-path .paket Paket && export PATH=.paket:$PATH
