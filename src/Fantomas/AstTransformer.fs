@@ -1,7 +1,9 @@
 module Fantomas.AstTransformer
 
+open Fantomas.AstTransformerTypes
 open FSharp.Compiler.Range
 open FSharp.Compiler.SyntaxTree
+open Fantomas.TriviaTypes
 
 let rec (|Sequentials|_|) = function
     | SynExpr.Sequential(_, isTrueSeq, e, Sequentials es, range) ->
@@ -10,24 +12,22 @@ let rec (|Sequentials|_|) = function
         Some [isTrueSeq, e1, Some e2, range]
     | _ -> None
 
-type Id =
-    { Ident: string
-      Range: range option }
-
 type FsAstNode = obj
 
 type Node =
-    { Type: string
+    { Type: FsAstType
       Range: range option
-      Properties: Map<string, obj>
+      Properties: FsAstProp list
       Childs: Node list
+      Parent: Node option
+      Trivias : TriviaNode list
       FsAstNode: FsAstNode }
 
 module Helpers =
     let r(r: FSharp.Compiler.Range.range): range option =
         Some r
 
-    let p = Map.ofList
+    let p = id
     let inline (==>) a b = (a,box b)
 
     let noRange =
@@ -48,25 +48,29 @@ module private Ast =
     let rec visit(ast: SynModuleOrNamespace ): Node =
         visitSynModuleOrNamespace ast
 
-    and visitSynModuleOrNamespace(modOrNs: SynModuleOrNamespace): Node =
+    and visitSynModuleOrNamespace (modOrNs: SynModuleOrNamespace): Node =
         match modOrNs with
         | SynModuleOrNamespace(longIdent,isRecursive,isModule,decls,_,attrs,access,range) ->
             let collectIdents (idents: LongIdent) =
                 idents
                 |> List.map (fun ident ->
-                    { Type = "Ident"
+                    { Type = FsAstType.Ident
                       Range = r ident.idRange
-                      Properties = Map.empty
+                      Properties = []
                       FsAstNode = ident
+                      Trivias = []
+                      Parent = None
                       Childs = [] })
-            {Type = sprintf "SynModuleOrNamespace.%A" isModule
+            {Type = FsAstType.SynModuleOrNamespace
              Range = r range
              Properties =
-                 p [yield "isRecursive" ==> isRecursive
-                    yield "isModule" ==> isModule
-                    yield "longIdent" ==> li longIdent
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.IsRecursive (isRecursive)
+                    yield FsAstProp.IsModule (isModule)
+                    yield FsAstProp.LongIdent (li longIdent)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = modOrNs
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! (if isModule = SynModuleOrNamespaceKind.DeclaredNamespace then collectIdents longIdent else [])
                   yield! attrs |> List.map visitSynAttributeList
@@ -75,638 +79,802 @@ module private Ast =
     and visitSynModuleDecl(ast: SynModuleDecl) : Node =
         match ast with
         | SynModuleDecl.ModuleAbbrev(ident,longIdent,range) ->
-            {Type = "SynModuleDecl.ModuleAbbrev"
+            {Type = FsAstType.SynModuleDecl_ModuleAbbrev
              Range = r range
              Properties =
-                 p ["ident" ==> i ident
-                    "longIdent" ==> li longIdent]
+                 p [FsAstProp.Ident (i ident)
+                    FsAstProp.LongIdent (li longIdent)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynModuleDecl.NestedModule(sci,isRecursive,decls,_,range) ->
-            {Type = "SynModuleDecl.NestedModule"
+            {Type = FsAstType.SynModuleDecl_NestedModule
              Range = r range
-             Properties = p ["isRecursive" ==> isRecursive]
+             Properties = p [FsAstProp.IsRecursive (isRecursive)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynComponentInfo sci
                   yield! (decls |> List.map visitSynModuleDecl)]}
         | SynModuleDecl.Let(_,bindings,range) ->
-            {Type = "SynModuleDecl.Let"
+            {Type = FsAstType.SynModuleDecl_Let
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = bindings |> List.map visitSynBinding}
         | SynModuleDecl.DoExpr(_,expr,range) ->
-            {Type = "SynModuleDecl.DoExpr"
+            {Type = FsAstType.SynModuleDecl_DoExpr
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitSynExpr expr]}
         | SynModuleDecl.Types(typeDefs,range) ->
-            {Type = "SynModuleDecl.Types"
+            {Type = FsAstType.SynModuleDecl_Types
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = typeDefs |> List.map visitSynTypeDefn}
         | SynModuleDecl.Exception(exceptionDef,range) ->
-            {Type = "SynModuleDecl.Exception"
+            {Type = FsAstType.SynModuleDecl_Exception
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitSynExceptionDefn exceptionDef]}
         | SynModuleDecl.Open(longDotId,range) ->
-            {Type = "SynModuleDecl.Open"
+            {Type = FsAstType.SynModuleDecl_Open
              Range = r range
-             Properties = p ["longIdent" ==> lid longDotId]
+             Properties = p [FsAstProp.LongIdent (lid longDotId)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynModuleDecl.Attributes(attrs,range) ->
-            {Type = "SynModuleDecl.Attributes"
+            {Type = FsAstType.SynModuleDecl_Attributes
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = attrs |> List.map visitSynAttributeList}
         | SynModuleDecl.HashDirective(hash,range) ->
-            {Type = "SynModuleDecl.HashDirective"
+            {Type = FsAstType.SynModuleDecl_HashDirective
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitParsedHashDirective hash]}
         | SynModuleDecl.NamespaceFragment(moduleOrNamespace) ->
-            {Type = "SynModuleDecl.NamespaceFragment"
+            {Type = FsAstType.SynModuleDecl_NamespaceFragment
              Range = noRange
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitSynModuleOrNamespace moduleOrNamespace]}
 
     and visitSynExpr(synExpr: SynExpr): Node =
         match synExpr with
         | SynExpr.Paren(expr,leftParenRange,rightParenRange,range) ->
-            {Type = "SynExpr.Paren"
+            {Type = FsAstType.SynExpr_Paren
              Range = r range
              Properties =
-                 p [yield "leftParenRange" ==> r leftParenRange
-                    if rightParenRange.IsSome then yield "rightParenRange" ==> r rightParenRange.Value]
+                 p [yield FsAstProp.LeftParenRange (leftParenRange)
+                    if rightParenRange.IsSome then yield FsAstProp.RightParenRange (rightParenRange.Value)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.Quote(operator,isRaw,quotedSynExpr,isFromQueryExpression,range) ->
-            {Type = "SynExpr.Quote"
+            {Type = FsAstType.SynExpr_Quote
              Range = r range
              Properties =
-                 p ["isRaw" ==> isRaw
-                    "isFromQueryExpression" ==> isFromQueryExpression]
+                 p [FsAstProp.IsRaw (isRaw)
+                    FsAstProp.IsFromQueryExpression (isFromQueryExpression)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr operator
                   yield visitSynExpr quotedSynExpr]}
         | SynExpr.Const(constant,range) ->
-            {Type = "SynExpr.Const"
+            {Type = FsAstType.SynExpr_Const
              Range = r range
-             Properties = p ["constant" ==> visitSynConst constant]
+             Properties = p [FsAstProp.Constant (constant)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.Typed(expr,typeName,range) ->
-            {Type = "SynExpr.Typed"
+            {Type = FsAstType.SynExpr_Typed
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynType typeName]}
         | SynExpr.Tuple(isStruct,exprs,commaRanges,range) ->
-            {Type = "SynExpr.Tuple"
+            {Type = FsAstType.SynExpr_Tuple
              Range = r range
-             Properties = p ["isStruct" ==> isStruct; "commaRanges" ==> (commaRanges |> List.map r)]
+             Properties = p [FsAstProp.IsStruct isStruct; FsAstProp.CommaRanges (commaRanges)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield! exprs |> List.map visitSynExpr]}
         | SynExpr.ArrayOrList(isList,exprs,range) ->
-            {Type = "SynExpr.StructTuple"
+            {Type = FsAstType.SynExpr_StructTuple
              Range = r range
-             Properties = p ["isList" ==> isList]
+             Properties = p [FsAstProp.IsList (isList)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield! exprs |> List.map visitSynExpr]}
         | SynExpr.Record(_,_,recordFields,range) ->
-            {Type = "SynExpr.Record"
+            {Type = FsAstType.SynExpr_Record
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield! recordFields |> List.map visitRecordField]}
         | SynExpr.AnonRecd(_,_,recordFields,range) ->
-            {Type = "SynExpr.AnonRecd"
+            {Type = FsAstType.SynExpr_AnonRecd
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield! recordFields |> List.map visitAnonRecordField]}
         | SynExpr.New(isProtected,typeName,expr,range) ->
-            {Type = "SynExpr.New"
+            {Type = FsAstType.SynExpr_New
              Range = r range
-             Properties = p ["isProtected" ==> isProtected]
+             Properties = p [FsAstProp.IsProtected (isProtected)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynType typeName]}
         | SynExpr.ObjExpr(objType,argOptions,bindings,extraImpls,newExprRange,range) ->
-            {Type = "SynExpr.ObjExpr"
+            {Type = FsAstType.SynExpr_ObjExpr
              Range = r range
-             Properties = p ["newExprRange" ==> r newExprRange]
+             Properties = p [FsAstProp.NewExprRange (newExprRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType objType
                   if argOptions.IsSome then yield visitArgsOption argOptions.Value
                   yield! extraImpls |> List.map visitSynInterfaceImpl
                   yield! bindings |> List.map visitSynBinding]}
         | SynExpr.While(_,whileExpr,doExpr,range) ->
-            {Type = "SynExpr.While"
+            {Type = FsAstType.SynExpr_While
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr whileExpr
                   yield visitSynExpr doExpr]}
         | SynExpr.For(_,ident,identBody,_,toBody,doBody,range) ->
-            {Type = "SynExpr.For"
+            {Type = FsAstType.SynExpr_For
              Range = r range
-             Properties = p ["ident" ==> i ident]
+             Properties = p [FsAstProp.Ident (i ident)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr identBody
                   yield visitSynExpr toBody
                   yield visitSynExpr doBody]}
         | SynExpr.ForEach(_,(SeqExprOnly seqExprOnly),isFromSource,pat,enumExpr,bodyExpr,range) ->
-            {Type = "SynExpr.ForEach"
+            {Type = FsAstType.SynExpr_ForEach
              Range = r range
              Properties =
-                 p ["isFromSource" ==> isFromSource
-                    "seqExprOnly" ==> seqExprOnly]
+                 p [FsAstProp.IsFromSource (isFromSource)
+                    FsAstProp.SeqExprOnly (seqExprOnly)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat pat
                   yield visitSynExpr enumExpr
                   yield visitSynExpr bodyExpr]}
         | SynExpr.ArrayOrListOfSeqExpr(isArray,expr,range) ->
-            {Type = "SynExpr.ArrayOrListOfSeqExpr"
+            {Type = FsAstType.SynExpr_ArrayOrListOfSeqExpr
              Range = r range
-             Properties = p ["isArray" ==> isArray]
+             Properties = p [FsAstProp.IsArray (isArray)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.CompExpr(isArrayOrList,isNotNakedRefCell,expr,range) ->
-            {Type = "SynExpr.CompExpr"
+            {Type = FsAstType.SynExpr_CompExpr
              Range = r range
              Properties =
-                 p ["isArrayOrList" ==> isArrayOrList
-                    "isNotNakedRefCell" ==> isNotNakedRefCell]
+                 p [FsAstProp.IsArrayOrList (isArrayOrList)
+                    FsAstProp.IsNotNakedRefCell (!isNotNakedRefCell)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.Lambda(fromMethod,inLambdaSeq,args,body,range) ->
-            {Type = "SynExpr.Lambda"
+            {Type = FsAstType.SynExpr_Lambda
              Range = r range
              Properties =
-                 p ["fromMethod" ==> fromMethod
-                    "inLambdaSeq" ==> inLambdaSeq]
+                 p [FsAstProp.FromMethod (fromMethod)
+                    FsAstProp.InLambdaSeq (inLambdaSeq)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynSimplePats args
                   yield visitSynExpr body]}
         | SynExpr.MatchLambda(isExnMatch,_,matchClauses,_,range) ->
-            {Type = "SynExpr.MatchLambda"
+            {Type = FsAstType.SynExpr_MatchLambda
              Range = r range
-             Properties = p ["isExnMatch" ==> isExnMatch]
+             Properties = p [FsAstProp.IsExnMatch (isExnMatch)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield! matchClauses |> List.map visitSynMatchClause]}
         | SynExpr.Match(_,expr,clauses,range) ->
-            {Type = "SynExpr.Match"
+            {Type = FsAstType.SynExpr_Match
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield! clauses |> List.map visitSynMatchClause]}
         | SynExpr.Do(expr,range) ->
-            {Type = "SynExpr.Do"
+            {Type = FsAstType.SynExpr_Do
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.Assert(expr,range) ->
-            {Type = "SynExpr.Assert"
+            {Type = FsAstType.SynExpr_Assert
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.App(atomicFlag,isInfix,funcExpr,argExpr,range) ->
-            {Type = "SynExpr.App"
+            {Type = FsAstType.SynExpr_App
              Range = r range
              Properties =
-                 p ["atomicFlag" ==> (match atomicFlag with
-                                      | ExprAtomicFlag.Atomic -> "Atomic"
-                                      | _ -> "Not Atomic")
-                    "isInfix" ==> isInfix]
+                 p [FsAstProp.AtomicFlag (atomicFlag)
+                    FsAstProp.IsInfix (isInfix)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr funcExpr
                   yield visitSynExpr argExpr]}
         | SynExpr.TypeApp(expr,lESSrange,typeNames,commaRanges,gREATERrange,typeArgsRange,range) ->
-            {Type = "SynExpr.TypeApp"
+            {Type = FsAstType.SynExpr_TypeApp
              Range = r range
              Properties =
-                 p [yield "lESSrange" ==> r lESSrange
-                    yield "commaRanges" ==> (commaRanges |> List.map r)
-                    if gREATERrange.IsSome then yield "gREATERrange" ==> r gREATERrange.Value
-                    yield "typeArgsRange" ==> r typeArgsRange]
+                 p [yield FsAstProp.LESSrange (lESSrange)
+                    yield FsAstProp.CommaRanges ((commaRanges))
+                    if gREATERrange.IsSome then yield FsAstProp.GREATERrange (gREATERrange.Value)
+                    yield FsAstProp.TypeArgsRange (typeArgsRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield! typeNames |> List.map visitSynType]}
         | SynExpr.LetOrUse(isRecursive,isUse,bindings,body,range) ->
-            {Type = "SynExpr.LetOrUse"
+            {Type = FsAstType.SynExpr_LetOrUse
              Range = r range
              Properties =
-                 p ["isRecursive" ==> isRecursive
-                    "isUse" ==> isUse]
+                 p [FsAstProp.IsRecursive (isRecursive)
+                    FsAstProp.IsUse (isUse)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! bindings |> List.map visitSynBinding
                   yield visitSynExpr body]}
         | SynExpr.TryWith(tryExpr,tryRange,withCases,withRange,range,_,_) ->
-            {Type = "SynExpr.TryWith"
+            {Type = FsAstType.SynExpr_TryWith
              Range = r range
              Properties =
-                 p ["tryRange" ==> r tryRange
-                    "withRange" ==> r withRange]
+                 p [FsAstProp.TryRange (tryRange)
+                    FsAstProp.WithRange (withRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr tryExpr
                   yield! withCases |> List.map visitSynMatchClause]}
         | SynExpr.TryFinally(tryExpr,finallyExpr,range,_,_) ->
-            {Type = "SynExpr.TryFinally"
+            {Type = FsAstType.SynExpr_TryFinally
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr tryExpr
                   yield visitSynExpr finallyExpr]}
         | SynExpr.Lazy(ex,range) ->
-            {Type = "SynExpr.Lazy"
+            {Type = FsAstType.SynExpr_Lazy
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr ex]}
         | Sequentials xs -> // use tail-rec active pattern to avoid stack overflow
             let rec cons xs =
                 match xs with
                 | [] -> failwith "should not happen" // expr2Opt is always Some in last item
                 | ((isTrueSeq,expr1,expr2Opt,range)::rest) ->
-                    {Type = "SynExpr.Sequential"
+                    {Type = FsAstType.SynExpr_Sequential
                      Range = r range
-                     Properties = p ["isTrueSeq" ==> isTrueSeq]
+                     Properties = p [FsAstProp.IsTrueSeq (isTrueSeq)]
                      FsAstNode = synExpr
+                     Trivias = []
+                     Parent = None
                      Childs =
                          [yield visitSynExpr expr1
                           yield expr2Opt |> Option.map visitSynExpr |> Option.defaultWith (fun () -> cons rest)]}
             cons xs
         | SynExpr.Sequential(_,isTrueSeq,expr1,expr2,range) ->
-            {Type = "SynExpr.Sequential"
+            {Type = FsAstType.SynExpr_Sequential
              Range = r range
-             Properties = p ["isTrueSeq" ==> isTrueSeq]
+             Properties = p [FsAstProp.IsTrueSeq (isTrueSeq)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr1
                   yield visitSynExpr expr2]}
         | SynExpr.SequentialOrImplicitYield(seqPoint,expr1,expr2,ifNotStmt,range) ->
-            {Type = "SynExpr.SequentialOrImplicitYield"
+            {Type = FsAstType.SynExpr_SequentialOrImplicitYield
              Range = r range
              FsAstNode = synExpr
-             Properties = p ["seqPoint" ==> seqPoint] // https://fsharp.github.io/FSharp.Compiler.Service/reference/fsharp-compiler-ast-sequencepointinfoforseq.html
+             Trivias = []
+             Parent = None
+             Properties = p [FsAstProp.SeqPoint (seqPoint)] // https://fsharp.github.io/FSharp.Compiler.Service/reference/fsharp-compiler-ast-sequencepointinfoforseq.html
              Childs = [ yield visitSynExpr expr1
                         yield visitSynExpr expr2
                         yield visitSynExpr ifNotStmt ]}
         | SynExpr.IfThenElse(ifExpr,thenExpr,elseExpr,_,isFromErrorRecovery,ifToThenRange,range) ->
-            {Type = "SynExpr.IfThenElse"
+            {Type = FsAstType.SynExpr_IfThenElse
              Range = r range
              Properties =
-                 p ["isFromErrorRecovery" ==> isFromErrorRecovery
-                    "ifToThenRange" ==> r ifToThenRange]
+                 p [FsAstProp.IsFromErrorRecovery (isFromErrorRecovery)
+                    FsAstProp.IfToThenRange (ifToThenRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr ifExpr
                   yield visitSynExpr thenExpr
                   if elseExpr.IsSome then yield visitSynExpr elseExpr.Value]}
         | SynExpr.Ident(id) ->
-            {Type = "SynExpr.Ident"
+            {Type = FsAstType.SynExpr_Ident
              Range = (i id).Range
-             Properties = p ["ident" ==> i id]
+             Properties = p [FsAstProp.Ident (i id)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.LongIdent(isOptional,longDotId,_,range) ->
             let ids = visitLongIdentWithDots longDotId
-            {Type = "SynExpr.LongIdent"
+            {Type = FsAstType.SynExpr_LongIdent
              Range = r range
              Properties =
-                 p ["isOptional" ==> isOptional
-                    "longDotId" ==> lid longDotId]
+                 p [FsAstProp.IsOptional (isOptional)
+                    FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = ids}
         | SynExpr.LongIdentSet(longDotId,expr,range) ->
-            {Type = "SynExpr.LongIdentSet"
+            {Type = FsAstType.SynExpr_LongIdentSet
              Range = r range
-             Properties = p ["longDotId" ==> lid longDotId]
+             Properties = p [FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.DotGet(expr,rangeOfDot,longDotId,range) ->
             // Idents are collected as childs here to deal with unit test ``Fluent api with comments should remain on same lines``
             let ids = visitLongIdentWithDots longDotId
-            {Type = "SynExpr.DotGet"
+            {Type = FsAstType.SynExpr_DotGet
              Range = r range
              Properties =
-                 p ["rangeOfDot" ==> r rangeOfDot
-                    "longDotId" ==> lid longDotId]
+                 p [FsAstProp.RangeOfDot (rangeOfDot)
+                    FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [
                  yield visitSynExpr expr
                  yield! ids
              ]}
         | SynExpr.DotSet(expr,longDotId,e2,range) ->
-            {Type = "SynExpr.DotSet"
+            {Type = FsAstType.SynExpr_DotSet
              Range = r range
-             Properties = p ["longDotId" ==> lid longDotId]
+             Properties = p [FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynExpr e2]}
         | SynExpr.Set(e1,e2,range) ->
-            {Type = "SynExpr.Set"
+            {Type = FsAstType.SynExpr_Set
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr e1
                   yield visitSynExpr e2]}
         | SynExpr.DotIndexedGet(objectExpr,indexExprs,dotRange,range) ->
-            {Type = "SynExpr.DotIndexedGet"
+            {Type = FsAstType.SynExpr_DotIndexedGet
              Range = r range
-             Properties = p ["dotRange" ==> r dotRange]
+             Properties = p [FsAstProp.DotRange  (dotRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr objectExpr
                   yield! indexExprs |> List.map visitSynIndexerArg]}
         | SynExpr.DotIndexedSet(objectExpr,indexExprs,valueExpr,leftOfSetRange,dotRange,range) ->
-            {Type = "SynExpr.DotIndexedSet"
+            {Type = FsAstType.SynExpr_DotIndexedSet
              Range = r range
              Properties =
-                 p ["leftOfSetRange" ==> r leftOfSetRange
-                    "dotRange" ==> r dotRange]
+                 p [FsAstProp.LeftOfSetRange  (leftOfSetRange)
+                    FsAstProp.DotRange  (dotRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr objectExpr
                   yield! indexExprs |> List.map visitSynIndexerArg
                   yield visitSynExpr valueExpr]}
         | SynExpr.NamedIndexedPropertySet(longDotId,e1,e2,range) ->
-            {Type = "SynExpr.NamedIndexedPropertySet"
+            {Type = FsAstType.SynExpr_NamedIndexedPropertySet
              Range = r range
-             Properties = p ["longDotId" ==> lid longDotId]
+             Properties = p [FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr e1
                   yield visitSynExpr e2]}
         | SynExpr.DotNamedIndexedPropertySet(expr,longDotId,e1,e2,range) ->
-            {Type = "SynExpr.DotNamedIndexedPropertySet"
+            {Type = FsAstType.SynExpr_DotNamedIndexedPropertySet
              Range = r range
-             Properties = p ["longDotId" ==> lid longDotId]
+             Properties = p [FsAstProp.LongDotId (lid longDotId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynExpr e1
                   yield visitSynExpr e2]}
         | SynExpr.TypeTest(expr,typeName,range) ->
-            {Type = "SynExpr.TypeTest"
+            {Type = FsAstType.SynExpr_TypeTest
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynType typeName]}
         | SynExpr.Upcast(expr,typeName,range) ->
-            {Type = "SynExpr.Upcast"
+            {Type = FsAstType.SynExpr_Upcast
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynType typeName]}
         | SynExpr.Downcast(expr,typeName,range) ->
-            {Type = "SynExpr.Downcast"
+            {Type = FsAstType.SynExpr_Downcast
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynType typeName]}
         | SynExpr.InferredUpcast(expr,range) ->
-            {Type = "SynExpr.InferredUpcast"
+            {Type = FsAstType.SynExpr_InferredUpcast
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.InferredDowncast(expr,range) ->
-            {Type = "SynExpr.InferredDowncast"
+            {Type = FsAstType.SynExpr_InferredDowncast
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.Null(range) ->
-            {Type = "SynExpr.Null"
+            {Type = FsAstType.SynExpr_Null
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.AddressOf(isByref,expr,refRange,range) ->
-            {Type = "SynExpr.AddressOf"
+            {Type = FsAstType.SynExpr_AddressOf
              Range = r range
              Properties =
-                 p ["isByref" ==> isByref
-                    "refRange" ==> r refRange]
+                 p [FsAstProp.IsByref (isByref)
+                    FsAstProp.RefRange  (refRange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.TraitCall(typars,sign,expr,range) ->
-            {Type = "SynExpr.AddressOf"
+            {Type = FsAstType.SynExpr_AddressOf
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! typars |> List.map visitSynTypar
                   yield visitSynMemberSig sign
                   yield visitSynExpr expr]}
         | SynExpr.JoinIn(expr,inrange,expr2,range) ->
-            {Type = "SynExpr.JoinIn"
+            {Type = FsAstType.SynExpr_JoinIn
              Range = r range
-             Properties = p ["inRange" ==> r inrange]
+             Properties = p [FsAstProp.InRange  (inrange)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield visitSynExpr expr2]}
         | SynExpr.ImplicitZero(range) ->
-            {Type = "SynExpr.ImplicitZero"
+            {Type = FsAstType.SynExpr_ImplicitZero
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.YieldOrReturn(_,expr,range) ->
-            {Type = "SynExpr.YieldOrReturn"
+            {Type = FsAstType.SynExpr_YieldOrReturn
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.YieldOrReturnFrom(_,expr,range) ->
-            {Type = "SynExpr.YieldOrReturnFrom"
+            {Type = FsAstType.SynExpr_YieldOrReturnFrom
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.LetOrUseBang(_,isUse,isFromSource,pat,rhsExpr,andBangs,body,range) ->
-            {Type = "SynExpr.LetOrUseBang"
+            {Type = FsAstType.SynExpr_LetOrUseBang
              Range = r range
              Properties =
-                 p ["isUse" ==> isUse
-                    "isFromSource" ==> isFromSource]
+                 p [FsAstProp.IsUse (isUse)
+                    FsAstProp.IsFromSource (isFromSource)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat pat
                   yield visitSynExpr rhsExpr
                   yield! andBangs |> List.collect (fun (_,_,_,pat,body,_) -> visitSynPat pat :: [visitSynExpr body])
                   yield visitSynExpr body]}
         | SynExpr.MatchBang(_,expr,clauses,range) ->
-            {Type = "SynExpr.MatchBang"
+            {Type = FsAstType.SynExpr_MatchBang
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr expr
                   yield! clauses |> List.map visitSynMatchClause]}
         | SynExpr.DoBang(expr,range) ->
-            {Type = "SynExpr.DoBang"
+            {Type = FsAstType.SynExpr_DoBang
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.LibraryOnlyILAssembly(_,_,_,_,range) ->
-            {Type = "SynExpr.LibraryOnlyILAssembly"
+            {Type = FsAstType.SynExpr_LibraryOnlyILAssembly
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.LibraryOnlyStaticOptimization(_,_,_,range) ->
-            {Type = "SynExpr.LibraryOnlyStaticOptimization"
+            {Type = FsAstType.SynExpr_LibraryOnlyStaticOptimization
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.LibraryOnlyUnionCaseFieldGet(expr,longId,_,range) ->
-            {Type = "SynExpr.LibraryOnlyUnionCaseFieldGet"
+            {Type = FsAstType.SynExpr_LibraryOnlyUnionCaseFieldGet
              Range = r range
-             Properties = p ["longId" ==> li longId]
+             Properties = p [FsAstProp.LongId (li longId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.LibraryOnlyUnionCaseFieldSet(e1,longId,_,e2,range) ->
-            {Type = "SynExpr.LibraryOnlyUnionCaseFieldSet"
+            {Type = FsAstType.SynExpr_LibraryOnlyUnionCaseFieldSet
              Range = r range
-             Properties = p ["longId" ==> li longId]
+             Properties = p [FsAstProp.LongId (li longId)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr e1
                   yield visitSynExpr e2]}
         | SynExpr.ArbitraryAfterError(debugStr,range) ->
-            {Type = "SynExpr.ArbitraryAfterError"
+            {Type = FsAstType.SynExpr_ArbitraryAfterError
              Range = r range
-             Properties = p ["debugStr" ==> debugStr]
+             Properties = p [FsAstProp.DebugStr (debugStr)]
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynExpr.FromParseError(expr,range) ->
-            {Type = "SynExpr.FromParseError"
+            {Type = FsAstType.SynExpr_FromParseError
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.DiscardAfterMissingQualificationAfterDot(expr,range) ->
-            {Type = "SynExpr.DiscardAfterMissingQualificationAfterDot"
+            {Type = FsAstType.SynExpr_DiscardAfterMissingQualificationAfterDot
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynExpr.Fixed(expr,range) ->
-            {Type = "SynExpr.Fixed"
+            {Type = FsAstType.SynExpr_Fixed
              Range = r range
              Properties = p []
              FsAstNode = synExpr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
 
     and visitRecordField((longId,_) as rfn: RecordFieldName,expr: SynExpr option, _: BlockSeparator option) =
-        {Type = "RecordField"
+        {Type = FsAstType.RecordField
          Range = r longId.Range
-         Properties = p ["ident" ==> lid longId]
+         Properties = p [FsAstProp.LongId (lid longId)]
          FsAstNode = rfn
+         Trivias = []
+         Parent = None
          Childs =
              [if expr.IsSome then yield visitSynExpr expr.Value]}
     and visitAnonRecordField(ident: Ident,expr: SynExpr) =
-        {Type = "AnonRecordField"
+        {Type = FsAstType.AnonRecordField
          Range = noRange
-         Properties = p ["ident" ==> i ident]
+         Properties = p [FsAstProp.Ident (i ident)]
          FsAstNode = expr
+         Trivias = []
+         Parent = None
          Childs =
              [yield visitSynExpr expr]}
     and visitAnonRecordTypeField(ident: Ident,t: SynType) =
-        {Type = "AnonRecordTypeField"
+        {Type = FsAstType.AnonRecordTypeField
          Range = noRange
-         Properties = p ["ident" ==> i ident]
+         Properties = p [FsAstProp.Ident (i ident)]
          FsAstNode = t
+         Trivias = []
+         Parent = None
          Childs =
              [yield visitSynType t]}
 
     and visitSynMemberSig(ms: SynMemberSig): Node =
         match ms with
         | SynMemberSig.Member(valSig,_,range) ->
-            {Type = "SynMemberSig.Member"
+            {Type = FsAstType.SynMemberSig_Member
              Range = r range
              Properties = p []
              FsAstNode = ms
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynValSig valSig]}
         | SynMemberSig.Interface(typeName,range) ->
-            {Type = "SynMemberSig.Interface"
+            {Type = FsAstType.SynMemberSig_Interface
              Range = r range
              Properties = p []
              FsAstNode = ms
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType typeName]}
         | SynMemberSig.Inherit(typeName,range) ->
-            {Type = "SynMemberSig.Inherit"
+            {Type = FsAstType.SynMemberSig_Inherit
              Range = r range
              Properties = p []
              FsAstNode = ms
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType typeName]}
         | SynMemberSig.ValField(f,range) ->
-            {Type = "SynMemberSig.ValField"
+            {Type = FsAstType.SynMemberSig_ValField
              Range = r range
              Properties = p []
              FsAstNode = ms
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynField f]}
         | SynMemberSig.NestedType(typedef,range) ->
-            {Type = "SynMemberSig.NestedType"
+            {Type = FsAstType.SynMemberSig_NestedType
              Range = r range
              Properties = p []
              FsAstNode = ms
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynTypeDefnSig typedef]}
 
     and visitSynIndexerArg(ia: SynIndexerArg): Node =
         match ia with
         | SynIndexerArg.One(e,_fromEnd,_) ->
-            {Type = "SynIndexerArg.One"
+            {Type = FsAstType.SynIndexerArg_One
              Range = noRange
              Properties = p []
              FsAstNode = ia
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr e]}
         | SynIndexerArg.Two(e1,_fromEnd1,e2,_fromEnd2,_,_) ->
-            {Type = "SynIndexerArg.Two"
+            {Type = FsAstType.SynIndexerArg_Two
              Range = noRange
              Properties = p []
              FsAstNode = ia
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExpr e1
                   yield visitSynExpr e2]}
@@ -714,29 +882,35 @@ module private Ast =
     and visitSynMatchClause(mc: SynMatchClause): Node =
         match mc with
         | SynMatchClause.Clause(pat,e1,e2,range,_) ->
-            {Type = "SynMatchClause.Clause"
+            {Type = FsAstType.SynMatchClause_Clause
              Range = r range
              Properties = p []
              FsAstNode = mc
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat pat
                   if e1.IsSome then yield visitSynExpr e1.Value
                   yield visitSynExpr e2]}
 
     and visitArgsOption(expr: SynExpr,ident: Ident option) =
-        {Type = "ArgOptions"
+        {Type = FsAstType.ArgOptions
          Range = noRange
-         Properties = p [if ident.IsSome then yield "ident" ==> i ident.Value]
+         Properties = p [if ident.IsSome then yield FsAstProp.Ident (i ident.Value)]
          FsAstNode = expr
+         Trivias = []
+         Parent = None
          Childs = [yield visitSynExpr expr]}
 
     and visitSynInterfaceImpl(ii: SynInterfaceImpl): Node =
         match ii with
         | InterfaceImpl(typ,bindings,range) ->
-            {Type = "InterfaceImpl"
+            {Type = FsAstType.InterfaceImpl
              Range = r range
              Properties = p []
              FsAstNode = ii
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType typ
                   yield! (bindings |> List.map visitSynBinding)]}
@@ -744,10 +918,12 @@ module private Ast =
     and visitSynTypeDefn(td: SynTypeDefn) =
         match td with
         | TypeDefn(sci,stdr,members,range) ->
-            {Type = "TypeDefn"
+            {Type = FsAstType.TypeDefn
              Range = r range
              Properties = p []
              FsAstNode = td
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynComponentInfo sci
                   yield visitSynTypeDefnRepr stdr
@@ -756,10 +932,12 @@ module private Ast =
     and visitSynTypeDefnSig(typeDefSig: SynTypeDefnSig): Node =
         match typeDefSig with
         | TypeDefnSig(sci, synTypeDefnSigReprs,memberSig,range) ->
-            {Type = "TypeDefnSig"
+            {Type = FsAstType.TypeDefnSig
              Range = r range
              Properties = p []
              FsAstNode = typeDefSig
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynComponentInfo sci
                   yield visitSynTypeDefnSigRepr synTypeDefnSigReprs
@@ -768,108 +946,136 @@ module private Ast =
     and visitSynTypeDefnSigRepr(stdr: SynTypeDefnSigRepr): Node =
         match stdr with
         | SynTypeDefnSigRepr.ObjectModel(kind,members,range) ->
-            {Type = "SynTypeDefnSigRepr.ObjectModel"
+            {Type = FsAstType.SynTypeDefnSigRepr_ObjectModel
              Range = r range
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynTypeDefnKind kind
                   yield! (members |> List.map visitSynMemberSig)]}
         | SynTypeDefnSigRepr.Simple(simpleRepr,range) ->
-            {Type = "SynTypeDefnSigRepr.ObjectModel"
+            {Type = FsAstType.SynTypeDefnSigRepr_ObjectModel
              Range = r range
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynTypeDefnSimpleRepr simpleRepr]}
         | SynTypeDefnSigRepr.Exception(exceptionRepr) ->
-            {Type = "SynTypeDefnSigRepr.Exception"
+            {Type = FsAstType.SynTypeDefnSigRepr_Exception
              Range = noRange
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExceptionDefnRepr exceptionRepr]}
 
     and visitSynMemberDefn(mbrDef: SynMemberDefn): Node =
         match mbrDef with
         | SynMemberDefn.Open(longIdent,range) ->
-            {Type = "SynMemberDefn.Open"
+            {Type = FsAstType.SynMemberDefn_Open
              Range = r range
-             Properties = p ["longIdent" ==> li longIdent]
+             Properties = p [FsAstProp.LongIdent (li longIdent)]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynMemberDefn.Member(memberDefn,range) ->
-            {Type = "SynMemberDefn.Member"
+            {Type = FsAstType.SynMemberDefn_Member
              Range = r range
              Properties = p []
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynBinding memberDefn]}
         | SynMemberDefn.ImplicitCtor(access,attrs,ctorArgs,selfIdentifier,range) ->
-            {Type = "SynMemberDefn.ImplicitCtor"
+            {Type = FsAstType.SynMemberDefn_ImplicitCtor
              Range = r range
              Properties =
-                 p [if selfIdentifier.IsSome then yield "selfIdent" ==> i selfIdentifier.Value
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [if selfIdentifier.IsSome then yield FsAstProp.SelfIdent (i selfIdentifier.Value)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynSimplePats ctorArgs]}
         | SynMemberDefn.ImplicitInherit(inheritType,inheritArgs,inheritAlias,range) ->
-            {Type = "SynMemberDefn.ImplicitInherit"
+            {Type = FsAstType.SynMemberDefn_ImplicitInherit
              Range = r range
-             Properties = p [if inheritAlias.IsSome then yield "inheritAlias" ==> i inheritAlias.Value]
+             Properties = p [if inheritAlias.IsSome then yield FsAstProp.InheritAlias (i inheritAlias.Value)]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType inheritType
                   yield visitSynExpr inheritArgs]}
         | SynMemberDefn.LetBindings(bindings,isStatic,isRecursive,range) ->
-            {Type = "SynMemberDefn.LetBindings"
+            {Type = FsAstType.SynMemberDefn_LetBindings
              Range = r range
              Properties =
-                 p ["isStatic" ==> isStatic
-                    "isRecursive" ==> isRecursive]
+                 p [FsAstProp.IsStatic (isStatic)
+                    FsAstProp.IsRecursive (isRecursive)]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield! bindings |> List.map visitSynBinding]}
         | SynMemberDefn.AbstractSlot(valSig,_,range) ->
-            {Type = "SynMemberDefn.AbstractSlot"
+            {Type = FsAstType.SynMemberDefn_AbstractSlot
              Range = r range
              Properties = p []
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynValSig valSig]}
         | SynMemberDefn.Interface(typ,members,range) ->
-            {Type = "SynMemberDefn.Interface"
+            {Type = FsAstType.SynMemberDefn_Interface
              Range = r range
              Properties = p []
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType typ
                   if members.IsSome then yield! members.Value |> List.map visitSynMemberDefn]}
         | SynMemberDefn.Inherit(typ,ident,range) ->
-            {Type = "SynMemberDefn.Inherit"
+            {Type = FsAstType.SynMemberDefn_Inherit
              Range = r range
-             Properties = p [if ident.IsSome then yield "ident" ==> i ident.Value]
+             Properties = p [if ident.IsSome then yield FsAstProp.Ident (i ident.Value)]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType typ]}
         | SynMemberDefn.ValField(fld,range) ->
-            {Type = "SynMemberDefn.ValField"
+            {Type = FsAstType.SynMemberDefn_ValField
              Range = r range
              Properties = p []
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynField fld]}
         | SynMemberDefn.NestedType(typeDefn,access,range) ->
-            {Type = "SynMemberDefn.NestedType"
+            {Type = FsAstType.SynMemberDefn_NestedType
              Range = r range
-             Properties = p [if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+             Properties = p [if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynTypeDefn typeDefn]}
         | SynMemberDefn.AutoProperty(attrs,isStatic,ident,typeOpt,propKind,_,_,access,synExpr,getSetRange,range) ->
-            {Type = "SynMemberDefn.AutoProperty"
+            {Type = FsAstType.SynMemberDefn_AutoProperty
              Range = r range
              Properties =
-                 p [yield "isStatic" ==> isStatic
-                    yield "ident" ==> i ident
-                    yield "propKind" ==> visitMemberKind propKind
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)
-                    if getSetRange.IsSome then yield "getSetRange" ==> (getSetRange.Value |> r)]
+                 p [yield FsAstProp.IsStatic (isStatic)
+                    yield FsAstProp.Ident (i ident)
+                    yield FsAstProp.PropKind (propKind)
+                    if access.IsSome then yield FsAstProp.Access  access.Value
+                    if getSetRange.IsSome then yield FsAstProp.GetSetRange ((getSetRange.Value))]
              FsAstNode = mbrDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   if typeOpt.IsSome then yield visitSynType typeOpt.Value
@@ -878,28 +1084,34 @@ module private Ast =
     and visitSynSimplePat(sp: SynSimplePat): Node =
         match sp with
         | SynSimplePat.Id(ident,_,isCompilerGenerated,isThisVar,isOptArg,range) ->
-            {Type = "SynSimplePat.Id"
+            {Type = FsAstType.SynSimplePat_Id
              Range = r range
              Properties =
-                 p ["isCompilerGenerated" ==> isCompilerGenerated
-                    "isThisVar" ==> isThisVar
-                    "isOptArg" ==> isOptArg
-                    "ident" ==> i ident]
+                 p [FsAstProp.IsCompilerGenerated (isCompilerGenerated)
+                    FsAstProp.IsThisVar (isThisVar)
+                    FsAstProp.IsOptArg (isOptArg)
+                    FsAstProp.Ident (i ident)]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynSimplePat.Typed(simplePat,typ,range) ->
-            {Type = "SynSimplePat.Typed"
+            {Type = FsAstType.SynSimplePat_Typed
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynSimplePat simplePat
                   yield visitSynType typ]}
         | SynSimplePat.Attrib(simplePat,attrs,range) ->
-            {Type = "SynSimplePat.Attrib"
+            {Type = FsAstType.SynSimplePat_Attrib
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynSimplePat simplePat
                   yield! attrs |> List.map visitSynAttributeList]}
@@ -907,16 +1119,20 @@ module private Ast =
     and visitSynSimplePats(sp: SynSimplePats): Node =
         match sp with
         | SynSimplePats.SimplePats(pats,range) ->
-            {Type = "SynSimplePats.SimplePats"
+            {Type = FsAstType.SynSimplePats_SimplePats
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map visitSynSimplePat]}
         | SynSimplePats.Typed(pats,typ,range) ->
-            {Type = "SynSimplePats.Typed"
+            {Type = FsAstType.SynSimplePats_Typed
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynSimplePats pats
                   yield visitSynType typ]}
@@ -924,14 +1140,16 @@ module private Ast =
     and visitSynBinding(binding: SynBinding): Node =
         match binding with
         | Binding(access,kind,mustInline,isMutable,attrs,_,valData,headPat,returnInfo,expr,range,_) ->
-            {Type = "Binding"
+            {Type = FsAstType.Binding
              Range = r range
              Properties =
-                 p [yield "mustInline" ==> mustInline
-                    yield "isMutable" ==> isMutable
-                    yield "kind" ==> visitSynBindingKind kind
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.MustInline (mustInline)
+                    yield FsAstProp.IsMutable (isMutable)
+                    yield FsAstProp.Kind (kind)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = binding
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynValData valData
@@ -942,23 +1160,27 @@ module private Ast =
     and visitSynValData(svd: SynValData): Node =
         match svd with
         | SynValData(_,svi,ident) ->
-            {Type = "Binding"
+            {Type = FsAstType.Binding
              Range = noRange
-             Properties = p [ if ident.IsSome then yield "ident" ==> (ident.Value |> i)]
+             Properties = p [ if ident.IsSome then yield FsAstProp.Ident ((ident.Value |> i))]
              FsAstNode = svd
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynValInfo svi]}
 
     and visitSynValSig(svs: SynValSig): Node =
         match svs with
         | ValSpfn(attrs,ident,explicitValDecls,synType,arity,isInline,isMutable,_,access,expr,range) ->
-            {Type = "ValSpfn"
+            {Type = FsAstType.ValSpfn
              Range = r range
              Properties =
-                 p [yield "ident" ==> i ident
-                    yield "isMutable" ==> isMutable
-                    yield "isInline" ==> isInline
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.Ident (i ident)
+                    yield FsAstProp.IsMutable (isMutable)
+                    yield FsAstProp.IsInline (isInline)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = svs
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynValTyparDecls explicitValDecls
@@ -969,19 +1191,23 @@ module private Ast =
     and visitSynValTyparDecls(valTypeDecl: SynValTyparDecls): Node =
         match valTypeDecl with
         | SynValTyparDecls(typardecls,_,_) ->
-            {Type = "SynValTyparDecls"
+            {Type = FsAstType.SynValTyparDecls
              Range = noRange
              Properties = p []
              FsAstNode = valTypeDecl
+             Trivias = []
+             Parent = None
              Childs = [yield! typardecls |> List.map visitSynTyparDecl]}
 
     and visitSynTyparDecl(std: SynTyparDecl): Node =
         match std with
         | TyparDecl(attrs,typar) ->
-            {Type = "TyparDecl"
+            {Type = FsAstType.TyparDecl
              Range = noRange
              Properties = p []
              FsAstNode = std
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynTypar typar]}
@@ -989,27 +1215,26 @@ module private Ast =
     and visitSynTypar(typar: SynTypar): Node =
         match typar with
         | Typar(ident,staticReq,isComGen) ->
-            {Type = "ValSpfn"
+            {Type = FsAstType.ValSpfn
              Range = noRange
              Properties =
-                 p ["ident" ==> i ident
-                    "isComGen" ==> isComGen
-                    "staticReq" ==> visitTyparStaticReq staticReq]
+                 p [FsAstProp.Ident (i ident)
+                    FsAstProp.IsComGen (isComGen)
+                    FsAstProp.StaticReq (staticReq)]
              FsAstNode = typar
+             Trivias = []
+             Parent = None
              Childs = []}
-
-    and visitTyparStaticReq(tsr: TyparStaticReq) =
-        match tsr with
-        | NoStaticReq -> "NoStaticReq"
-        | HeadTypeStaticReq -> "HeadTypeStaticReq"
 
     and visitSynBindingReturnInfo(returnInfo: SynBindingReturnInfo): Node =
         match returnInfo with
         | SynBindingReturnInfo(typeName,range,attrs) ->
-            {Type = "ComponentInfo"
+            {Type = FsAstType.ComponentInfo
              Range = r range
              Properties = p []
              FsAstNode = returnInfo
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType typeName
                   yield! (attrs |> List.map visitSynAttributeList)]}
@@ -1017,165 +1242,209 @@ module private Ast =
     and visitSynPat(sp: SynPat): Node =
         match sp with
         | SynPat.Const(sc,range) ->
-            {Type = "SynPat.Const"
+            {Type = FsAstType.SynPat_Const
              Range = r range
-             Properties = p ["const" ==> visitSynConst sc]
+             Properties = p [FsAstProp.Const (sc)]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.Wild(range) ->
-            {Type = "SynPat.Wild"
+            {Type = FsAstType.SynPat_Wild
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.Named(synPat,ident,isSelfIdentifier,access,range) ->
-            {Type = "SynPat.Named"
+            {Type = FsAstType.SynPat_Named
              Range = r range
              Properties =
-                 p [yield "ident" ==> i ident
-                    yield "isSelfIdentifier" ==> isSelfIdentifier
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.Ident (i ident)
+                    yield FsAstProp.IsSelfIdentifier (isSelfIdentifier)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynPat synPat]}
         | SynPat.Typed(synPat,synType,range) ->
-            {Type = "SynPat.Typed"
+            {Type = FsAstType.SynPat_Typed
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat synPat
                   yield visitSynType synType]}
         | SynPat.Attrib(synPat,attrs,range) ->
-            {Type = "SynPat.Attrib"
+            {Type = FsAstType.SynPat_Attrib
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat synPat
                   yield! attrs |> List.map visitSynAttributeList]}
         | SynPat.Or(synPat,synPat2,range) ->
-            {Type = "SynPat.Or"
+            {Type = FsAstType.SynPat_Or
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynPat synPat
                   yield visitSynPat synPat2]}
         | SynPat.Ands(pats,range) ->
-            {Type = "SynPat.Ands"
+            {Type = FsAstType.SynPat_Ands
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map visitSynPat]}
         | SynPat.LongIdent(longDotId,ident,svtd,ctorArgs,access,range) ->
-            {Type = "SynPat.LongIdent"
+            {Type = FsAstType.SynPat_LongIdent
              Range = r range
              Properties =
-                 p [if ident.IsSome then yield "ident" ==> (ident.Value |> i)
-                    yield "longDotId" ==> lid longDotId
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [if ident.IsSome then yield FsAstProp.Ident ((ident.Value |> i))
+                    yield FsAstProp.LongDotId (lid longDotId)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs =
                  [if svtd.IsSome then yield visitSynValTyparDecls svtd.Value
                   yield visitSynConstructorArgs ctorArgs]}
         | SynPat.Tuple(isStruct,pats,range) ->
-            {Type = "SynPat.Tuple"
+            {Type = FsAstType.SynPat_Tuple
              Range = r range
-             Properties = p ["isStruct" ==> isStruct]
+             Properties = p [FsAstProp.IsStruct (isStruct)]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map visitSynPat]}
         | SynPat.Paren(pat,range) ->
-            {Type = "SynPat.Paren"
+            {Type = FsAstType.SynPat_Paren
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [visitSynPat pat]}
         | SynPat.ArrayOrList(_,pats,range) ->
-            {Type = "SynPat.ArrayOrList"
+            {Type = FsAstType.SynPat_ArrayOrList
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map visitSynPat]}
         | SynPat.Record(pats,range) ->
-            {Type = "SynPat.Record"
+            {Type = FsAstType.SynPat_Record
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map(snd >> visitSynPat)]}
         | SynPat.Null(range) ->
-            {Type = "SynPat.Null"
+            {Type = FsAstType.SynPat_Null
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.OptionalVal(ident,range) ->
-            {Type = "SynPat.OptionalVal"
+            {Type = FsAstType.SynPat_OptionalVal
              Range = r range
-             Properties = p ["ident" ==> i ident]
+             Properties = p [FsAstProp.Ident (i ident)]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.IsInst(typ,range) ->
-            {Type = "SynPat.IsInst"
+            {Type = FsAstType.SynPat_IsInst
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [visitSynType typ]}
         | SynPat.QuoteExpr(expr,range) ->
-            {Type = "SynPat.QuoteExpr"
+            {Type = FsAstType.SynPat_QuoteExpr
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [visitSynExpr expr]}
         | SynPat.DeprecatedCharRange(c,c2,range) ->
-            {Type = "SynPat.DeprecatedCharRange"
+            {Type = FsAstType.SynPat_DeprecatedCharRange
              Range = r range
              Properties =
-                 p ["c" ==> c
-                    "c2" ==> c2]
+                 p [FsAstProp.C (c)
+                    FsAstProp.C2 (c2)]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.InstanceMember(ident,ident2,ident3,access,range) ->
-            {Type = "SynPat.InstanceMember"
+            {Type = FsAstType.SynPat_InstanceMember
              Range = r range
              Properties =
-                 p [yield "ident" ==> i ident
-                    yield "ident2" ==> i ident2
-                    if ident3.IsSome then yield "ident3" ==> (ident3.Value |> i)
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.Ident (i ident)
+                    yield FsAstProp.Ident2 (i ident2)
+                    if ident3.IsSome then yield FsAstProp.Ident3 ((ident3.Value |> i))
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynPat.FromParseError(pat,range) ->
-            {Type = "SynPat.FromParseError"
+            {Type = FsAstType.SynPat_FromParseError
              Range = r range
              Properties = p []
              FsAstNode = sp
+             Trivias = []
+             Parent = None
              Childs = [visitSynPat pat]}
 
     and visitSynConstructorArgs(ctorArgs: SynArgPats): Node =
         match ctorArgs with
         | Pats(pats) ->
-            {Type = "Pats"
+            {Type = FsAstType.Pats
              Range = noRange
              Properties = p []
              FsAstNode = ctorArgs
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map visitSynPat]}
         | NamePatPairs(pats,range) ->
-            {Type = "NamePatPairs"
+            {Type = FsAstType.NamePatPairs
              Range = r range
              Properties = p []
              FsAstNode = ctorArgs
+             Trivias = []
+             Parent = None
              Childs = [yield! pats |> List.map(snd >> visitSynPat)]}
 
     and visitSynComponentInfo(sci: SynComponentInfo): Node =
         match sci with
         | ComponentInfo(attribs,typeParams,_,longId,_,preferPostfix,access,range) ->
-            {Type = "ComponentInfo"
+            {Type = FsAstType.ComponentInfo
              Range = r range
              Properties =
-                 p [yield "longIdent" ==> li longId
-                    yield "preferPostfix" ==> preferPostfix
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.LongIdent (li longId)
+                    yield FsAstProp.PreferPostfix (preferPostfix)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = sci
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! (attribs |> List.map visitSynAttributeList)
                   yield! (typeParams |> List.map(visitSynTyparDecl))]}
@@ -1183,93 +1452,121 @@ module private Ast =
     and visitSynTypeDefnRepr(stdr: SynTypeDefnRepr): Node =
         match stdr with
         | SynTypeDefnRepr.ObjectModel(kind,members,range) ->
-            {Type = "SynTypeDefnRepr.ObjectModel"
+            {Type = FsAstType.SynTypeDefnRepr_ObjectModel
              Range = r range
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynTypeDefnKind kind
                   yield! (members |> List.map visitSynMemberDefn)]}
         | SynTypeDefnRepr.Simple(simpleRepr,range) ->
-            {Type = "SynTypeDefnRepr.ObjectModel"
+            {Type = FsAstType.SynTypeDefnRepr_ObjectModel
              Range = r range
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynTypeDefnSimpleRepr simpleRepr]}
         | SynTypeDefnRepr.Exception(exceptionRepr) ->
-            {Type = "SynTypeDefnRepr.Exception"
+            {Type = FsAstType.SynTypeDefnRepr_Exception
              Range = noRange
              Properties = p []
              FsAstNode = stdr
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExceptionDefnRepr exceptionRepr]}
 
     and visitSynTypeDefnKind(kind: SynTypeDefnKind) =
         match kind with
         | TyconUnspecified ->
-            {Type = "SynTypeDefnKind.TyconUnspecified"
+            {Type = FsAstType.SynTypeDefnKind_TyconUnspecified
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconClass ->
-            {Type = "SynTypeDefnKind.TyconClass"
+            {Type = FsAstType.SynTypeDefnKind_TyconClass
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconInterface ->
-            {Type = "SynTypeDefnKind.TyconInterface"
+            {Type = FsAstType.SynTypeDefnKind_TyconInterface
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconStruct ->
-            {Type = "SynTypeDefnKind.TyconStruct"
+            {Type = FsAstType.SynTypeDefnKind_TyconStruct
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconRecord ->
-            {Type = "SynTypeDefnKind.TyconRecord"
+            {Type = FsAstType.SynTypeDefnKind_TyconRecord
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconUnion ->
-            {Type = "SynTypeDefnKind.TyconUnion"
+            {Type = FsAstType.SynTypeDefnKind_TyconUnion
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconAbbrev ->
-            {Type = "SynTypeDefnKind.TyconAbbrev"
+            {Type = FsAstType.SynTypeDefnKind_TyconAbbrev
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconHiddenRepr ->
-            {Type = "SynTypeDefnKind.TyconHiddenRepr"
+            {Type = FsAstType.SynTypeDefnKind_TyconHiddenRepr
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconAugmentation ->
-            {Type = "SynTypeDefnKind.TyconAugmentation"
+            {Type = FsAstType.SynTypeDefnKind_TyconAugmentation
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconILAssemblyCode ->
-            {Type = "SynTypeDefnKind.TyconILAssemblyCode"
+            {Type = FsAstType.SynTypeDefnKind_TyconILAssemblyCode
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs = []}
         | TyconDelegate(typ,valinfo) ->
-            {Type = "SynTypeDefnKind.TyconDelegate"
+            {Type = FsAstType.SynTypeDefnKind_TyconDelegate
              Range = noRange
              Properties = p []
              FsAstNode = kind
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType typ
                   yield visitSynValInfo valinfo]}
@@ -1277,61 +1574,79 @@ module private Ast =
     and visitSynTypeDefnSimpleRepr(arg: SynTypeDefnSimpleRepr) =
         match arg with
         | SynTypeDefnSimpleRepr.None(range) ->
-            {Type = "SynTypeDefnSimpleRepr.None"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_None
              Range = r range
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynTypeDefnSimpleRepr.Union(access,unionCases,range) ->
-            {Type = "SynTypeDefnSimpleRepr.Union"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_Union
              Range = r range
-             Properties = p [if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+             Properties = p [if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = [yield! unionCases |> List.map visitSynUnionCase]}
         | SynTypeDefnSimpleRepr.Enum(enumCases,range) ->
-            {Type = "SynTypeDefnSimpleRepr.Enum"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_Enum
              Range = r range
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = [yield! enumCases |> List.map visitSynEnumCase]}
         | SynTypeDefnSimpleRepr.Record(access,recordFields,range) ->
-            {Type = "SynTypeDefnSimpleRepr.Record"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_Record
              Range = r range
-             Properties = p [if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+             Properties = p [if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = [yield! recordFields |> List.map visitSynField]}
         | SynTypeDefnSimpleRepr.General(_,_,_,_,_,_,_,range) ->
-            {Type = "SynTypeDefnSimpleRepr.General"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_General
              Range = r range
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynTypeDefnSimpleRepr.LibraryOnlyILAssembly(_,range) ->
-            {Type = "SynTypeDefnSimpleRepr.LibraryOnlyILAssembly"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_LibraryOnlyILAssembly
              Range = r range
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynTypeDefnSimpleRepr.TypeAbbrev(_,typ,range) ->
-            {Type = "SynTypeDefnSimpleRepr.TypeAbbrev"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_TypeAbbrev
              Range = r range
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = [visitSynType typ]}
         | SynTypeDefnSimpleRepr.Exception(edr) ->
-            {Type = "SynTypeDefnSimpleRepr.Exception"
+            {Type = FsAstType.SynTypeDefnSimpleRepr_Exception
              Range = noRange
              Properties = p []
              FsAstNode = arg
+             Trivias = []
+             Parent = None
              Childs = [visitSynExceptionDefnRepr edr]}
 
     and visitSynExceptionDefn(exceptionDef: SynExceptionDefn): Node =
         match exceptionDef with
         | SynExceptionDefn(sedr,members,range) ->
-            {Type = "SynExceptionDefn"
+            {Type = FsAstType.SynExceptionDefn
              Range = r range
              Properties = p []
              FsAstNode = exceptionDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExceptionDefnRepr sedr
                   yield! (members |> List.map visitSynMemberDefn)]}
@@ -1339,44 +1654,52 @@ module private Ast =
     and visitSynExceptionDefnRepr(sedr: SynExceptionDefnRepr): Node =
         match sedr with
         | SynExceptionDefnRepr(attrs,unionCase,longId,_,access,range) ->
-            {Type = "SynExceptionDefnRepr"
+            {Type = FsAstType.SynExceptionDefnRepr
              Range = r range
              Properties =
-                 p [if longId.IsSome then yield "longIdent" ==> (longId.Value |> li)
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [if longId.IsSome then yield FsAstProp.LongIdent ((longId.Value |> li))
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = sedr
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynUnionCase unionCase]}
 
     and visitSynAttribute(attr: SynAttribute): Node =
-        {Type = "SynAttribute"
+        {Type = FsAstType.SynAttribute
          Range = r attr.Range
          Properties =
-             p [if attr.Target.IsSome then yield "target" ==> i attr.Target.Value
-                yield "typeName" ==> lid attr.TypeName
-                yield "appliesToGetterAndSetter" ==> attr.AppliesToGetterAndSetter
-                yield "typeName" ==> lid attr.TypeName]
+             p [if attr.Target.IsSome then yield FsAstProp.Target (i attr.Target.Value)
+                yield FsAstProp.TypeName (lid attr.TypeName)
+                yield FsAstProp.AppliesToGetterAndSetter (attr.AppliesToGetterAndSetter)
+                yield FsAstProp.TypeName (lid attr.TypeName)]
          FsAstNode = attr
+         Trivias = []
+         Parent = None
          Childs = [visitSynExpr attr.ArgExpr]}
 
     and visitSynAttributeList(attrs: SynAttributeList): Node =
-        {Type = "SynAttributeList"
+        {Type = FsAstType.SynAttributeList
          Range = r attrs.Range
          Properties = p []
          FsAstNode = attrs
+         Trivias = []
+         Parent = None
          Childs = attrs.Attributes |> List.map visitSynAttribute
         }
 
     and visitSynUnionCase(uc: SynUnionCase): Node =
         match uc with
         | UnionCase(attrs,ident,uct,_,access,range) ->
-            {Type = "UnionCase"
+            {Type = FsAstType.UnionCase
              Range = r range
              Properties =
-                 p [yield "ident" ==> i ident
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.Ident (i ident)
+                    if access.IsSome then yield FsAstProp.Access  access.Value]
              FsAstNode = uc
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynUnionCaseType uct
                   yield! attrs |> List.map visitSynAttributeList]}
@@ -1384,16 +1707,20 @@ module private Ast =
     and visitSynUnionCaseType(uct: SynUnionCaseType) =
         match uct with
         | UnionCaseFields(cases) ->
-            {Type = "UnionCaseFields"
+            {Type = FsAstType.UnionCaseFields
              Range = noRange
              Properties = p []
              FsAstNode = uct
+             Trivias = []
+             Parent = None
              Childs = [yield! cases |> List.map visitSynField]}
         | UnionCaseFullType(stype,valInfo) ->
-            {Type = "UnionCaseFullType"
+            {Type = FsAstType.UnionCaseFullType
              Range = noRange
              Properties = p []
              FsAstNode = uct
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType stype
                   yield visitSynValInfo valInfo]}
@@ -1401,22 +1728,26 @@ module private Ast =
     and visitSynEnumCase(sec: SynEnumCase): Node =
         match sec with
         | EnumCase(attrs,ident,_,_,range) ->
-            {Type = "EnumCase"
+            {Type = FsAstType.EnumCase
              Range = r range
              Properties = p []
              FsAstNode = sec
+             Trivias = []
+             Parent = None
              Childs = [yield! attrs |> List.map visitSynAttributeList; yield visitIdent ident]}
 
     and visitSynField(sfield: SynField): Node =
         match sfield with
         | Field(attrs,isStatic,ident,typ,_,_,access,range) ->
-            {Type = "Field"
+            {Type = FsAstType.Field
              Range = r range
              Properties =
-                 p [if ident.IsSome then yield "ident" ==> (ident.Value |> i)
-                    yield "isStatic" ==> isStatic
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [if ident.IsSome then yield FsAstProp.Ident ((ident.Value |> i))
+                    yield FsAstProp.IsStatic (isStatic)
+                    if access.IsSome then yield FsAstProp.Access (access.Value)]
              FsAstNode = sfield
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! attrs |> List.map visitSynAttributeList
                   yield visitSynType typ]}
@@ -1424,129 +1755,161 @@ module private Ast =
     and visitSynType(st: SynType) =
         match st with
         | SynType.LongIdent(li) ->
-            {Type = "SynType.LongIdent"
+            {Type = FsAstType.SynType_LongIdent
              Range = noRange
-             Properties = p ["ident" ==> lid li]
+             Properties = p [FsAstProp.LongIdent (lid li)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynType.App(typeName,lESSrange,typeArgs,commaRanges,gREATERrange,isPostfix,range) ->
-            {Type = "SynType.App"
+            {Type = FsAstType.SynType_App
              Range = r range
              Properties =
-                 p [if lESSrange.IsSome then yield "lESSrange" ==> (lESSrange.Value |> r)
-                    yield "commaRanges" ==> (commaRanges |> List.map r)
-                    if gREATERrange.IsSome then yield "gREATERrange" ==> (gREATERrange.Value |> r)
-                    yield "isPostfix" ==> isPostfix]
+                 p [if lESSrange.IsSome then yield FsAstProp.LESSrange (lESSrange.Value)
+                    yield FsAstProp.CommaRanges (commaRanges)
+                    if gREATERrange.IsSome then yield FsAstProp.GREATERrange (gREATERrange.Value)
+                    yield FsAstProp.IsPostfix (isPostfix)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! typeArgs |> List.map visitSynType
                   yield visitSynType typeName]}
         | SynType.LongIdentApp(typeName,longDotId,lESSRange,typeArgs,commaRanges,gREATERrange,range) ->
-            {Type = "SynType.LongIdentApp"
+            {Type = FsAstType.SynType_LongIdentApp
              Range = r range
              Properties =
-                 p [yield "ident" ==> lid longDotId
-                    if lESSRange.IsSome then yield "lESSRange" ==> (lESSRange.Value |> r)
-                    yield "commaRanges" ==> (commaRanges |> List.map r)
-                    if gREATERrange.IsSome then yield "gREATERrange" ==> (gREATERrange.Value |> r)]
+                 p [yield FsAstProp.LongDotId (lid longDotId)
+                    if lESSRange.IsSome then yield FsAstProp.LESSRange (lESSRange.Value)
+                    yield FsAstProp.CommaRanges (commaRanges)
+                    if gREATERrange.IsSome then yield FsAstProp.GREATERrange (gREATERrange.Value)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! typeArgs |> List.map visitSynType
                   yield visitSynType typeName]}
         | SynType.Tuple(isStruct,typeNames,range) ->
-            {Type = "SynType.Tuple"
+            {Type = FsAstType.SynType_Tuple
              Range = r range
-             Properties = p ["isStruct" ==> isStruct]
+             Properties = p [FsAstProp.IsStruct (isStruct)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield! typeNames |> List.map(snd >> visitSynType)]}
         | SynType.Array(_,elementType,range) ->
-            {Type = "SynType.Array"
+            {Type = FsAstType.SynType_Array
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType elementType]}
         | SynType.Fun(argType,returnType,range) ->
-            {Type = "SynType.Fun"
+            {Type = FsAstType.SynType_Fun
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType argType
                   yield visitSynType returnType]}
         | SynType.Var(genericName,range) ->
-            {Type = "SynType.Var"
+            {Type = FsAstType.SynType_Var
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynTypar genericName]}
         | SynType.Anon(range) ->
-            {Type = "SynType.Anon"
+            {Type = FsAstType.SynType_Anon
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynType.WithGlobalConstraints(typeName,_,range) ->
-            {Type = "SynType.WithGlobalConstraints"
+            {Type = FsAstType.SynType_WithGlobalConstraints
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType typeName]}
         | SynType.HashConstraint(synType,range) ->
-            {Type = "SynType.HashConstraint"
+            {Type = FsAstType.SynType_HashConstraint
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType synType]}
         | SynType.MeasureDivide(dividendType,divisorType,range) ->
-            {Type = "SynType.MeasureDivide"
+            {Type = FsAstType.SynType_MeasureDivide
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType dividendType
                   yield visitSynType divisorType]}
         | SynType.MeasurePower(measureType,_,range) ->
-            {Type = "SynType.MeasurePower"
+            {Type = FsAstType.SynType_MeasurePower
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynType measureType]}
         | SynType.StaticConstant(constant,range) ->
-            {Type = "SynType.StaticConstant"
+            {Type = FsAstType.SynType_StaticConstant
              Range = r range
-             Properties = p ["constant" ==> visitSynConst constant]
+             Properties = p [FsAstProp.Constant (constant)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynType.StaticConstantExpr(expr,range) ->
-            {Type = "SynType.StaticConstantExpr"
+            {Type = FsAstType.SynType_StaticConstantExpr
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = [yield visitSynExpr expr]}
         | SynType.StaticConstantNamed(expr,typ,range) ->
-            {Type = "SynType.StaticConstantNamed"
+            {Type = FsAstType.SynType_StaticConstantNamed
              Range = r range
              Properties = p []
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynType expr
                   yield visitSynType typ]}
         | SynType.AnonRecd(isStruct,typeNames,range) ->
-            {Type = "SynType.AnonRecd"
+            {Type = FsAstType.SynType_AnonRecd
              Range = r range
-             Properties = p ["isStruct" ==> isStruct]
+             Properties = p [FsAstProp.IsStruct (isStruct)]
              FsAstNode = st
+             Trivias = []
+             Parent = None
              Childs = List.map visitAnonRecordTypeField typeNames}
-
-    and visitSynConst(sc: SynConst) = sprintf "%A" sc
 
     and visitSynValInfo(svi: SynValInfo) =
         match svi with
         | SynValInfo(args,arg) ->
-            {Type = "SynValInfo"
+            {Type = FsAstType.SynValInfo
              Range = noRange
              Properties = p []
              FsAstNode = svi
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! args |> List.collect(List.map visitSynArgInfo)
                   yield visitSynArgInfo arg]}
@@ -1554,57 +1917,42 @@ module private Ast =
     and visitSynArgInfo(sai: SynArgInfo) =
         match sai with
         | SynArgInfo(attrs,optional,ident) ->
-            {Type = "SynArgInfo"
+            {Type = FsAstType.SynArgInfo
              Range = noRange
              Properties =
-                 p [if ident.IsSome then yield "ident" ==> i ident.Value
-                    yield "optional" ==> optional]
+                 p [if ident.IsSome then yield FsAstProp.Ident (i ident.Value)
+                    yield FsAstProp.Optional (optional)]
              FsAstNode = sai
+             Trivias = []
+             Parent = None
              Childs = [yield! attrs |> List.map visitSynAttributeList]}
-
-    and visitSynAccess(a: SynAccess) =
-        match a with
-        | SynAccess.Private -> "Private"
-        | SynAccess.Internal -> "Internal"
-        | SynAccess.Public -> "Public"
-
-    and visitSynBindingKind(kind: SynBindingKind) =
-        match kind with
-        | SynBindingKind.DoBinding -> "Do Binding"
-        | SynBindingKind.StandaloneExpression -> "Standalone Expression"
-        | SynBindingKind.NormalBinding -> "Normal Binding"
-
-    and visitMemberKind(mk: MemberKind) =
-        match mk with
-        | MemberKind.ClassConstructor -> "ClassConstructor"
-        | MemberKind.Constructor -> "Constructor"
-        | MemberKind.Member -> "Member"
-        | MemberKind.PropertyGet -> "PropertyGet"
-        | MemberKind.PropertySet -> "PropertySet"
-        | MemberKind.PropertyGetSet -> "PropertyGetSet"
 
     and visitParsedHashDirective(hash: ParsedHashDirective): Node =
         match hash with
         | ParsedHashDirective(ident,longIdent,range) ->
-            {Type = "ParsedHashDirective"
+            {Type = FsAstType.ParsedHashDirective
              Range = r range
              Properties =
-                 p ["ident" ==> ident
-                    "longIdent" ==> longIdent]
+                 p [FsAstProp.Ident { Ident = ident; Range = None }
+                    FsAstProp.LongIdent (longIdent |> List.map (fun x -> { Ident = x; Range = None }))]
              FsAstNode = hash
+             Trivias = []
+             Parent = None
              Childs = []}
 
     and visitSynModuleOrNamespaceSig(modOrNs: SynModuleOrNamespaceSig): Node =
         match modOrNs with
         | SynModuleOrNamespaceSig(longIdent,isRecursive,isModule,decls,_,attrs,access,range) ->
-            {Type = sprintf "SynModuleOrNamespaceSig.%A" isModule
+            {Type = FsAstType.SynModuleOrNamespaceSig
              Range = r range
              Properties =
-                 p [yield "isRecursive" ==> isRecursive
-                    yield "isModule" ==> isModule
-                    yield "longIdent" ==> li longIdent
-                    if access.IsSome then yield "access" ==> (access.Value |> visitSynAccess)]
+                 p [yield FsAstProp.IsRecursive (isRecursive)
+                    yield FsAstProp.IsModule (isModule)
+                    yield FsAstProp.LongIdent (li longIdent)
+                    if access.IsSome then yield FsAstProp.Access (access.Value)]
              FsAstNode = modOrNs
+             Trivias = []
+             Parent = None
              Childs =
                  [yield! (if isModule = SynModuleOrNamespaceKind.DeclaredNamespace then visitLongIdent longIdent else [])
                   yield! attrs |> List.map visitSynAttributeList
@@ -1613,61 +1961,77 @@ module private Ast =
     and visitSynModuleSigDecl(ast: SynModuleSigDecl) : Node =
         match ast with
         | SynModuleSigDecl.ModuleAbbrev(ident,longIdent,range) ->
-            {Type = "SynModuleSigDecl.ModuleAbbrev"
+            {Type = FsAstType.SynModuleSigDecl_ModuleAbbrev
              Range = r range
              Properties =
-                 p ["ident" ==> i ident
-                    "longIdent" ==> li longIdent]
+                 p [FsAstProp.Ident (i ident)
+                    FsAstProp.LongIdent (li longIdent)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynModuleSigDecl.NestedModule(sci,isRecursive,decls,range) ->
-            {Type = "SynModuleSigDecl.NestedModule"
+            {Type = FsAstType.SynModuleSigDecl_NestedModule
              Range = r range
-             Properties = p ["isRecursive" ==> isRecursive]
+             Properties = p [FsAstProp.IsRecursive (isRecursive)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynComponentInfo sci
                   yield! (decls |> List.map visitSynModuleSigDecl)]}
         | SynModuleSigDecl.Val(SynValSig.ValSpfn _ as node, _) ->
             visitSynValSig node
         | SynModuleSigDecl.Types(typeDefs,range) ->
-            {Type = "SynModuleSigDecl.Types"
+            {Type = FsAstType.SynModuleSigDecl_Types
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = typeDefs |> List.map visitSynTypeDefnSig}
         | SynModuleSigDecl.Open(longId,range) ->
-            {Type = "SynModuleSigDecl.Open"
+            {Type = FsAstType.SynModuleSigDecl_Open
              Range = r range
-             Properties = p ["longIdent" ==> li longId]
+             Properties = p [FsAstProp.LongIdent (li longId)]
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = []}
         | SynModuleSigDecl.HashDirective(hash,range) ->
-            {Type = "SynModuleSigDecl.HashDirective"
+            {Type = FsAstType.SynModuleSigDecl_HashDirective
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitParsedHashDirective hash]}
         | SynModuleSigDecl.NamespaceFragment(moduleOrNamespace) ->
-            {Type = "SynModuleDecl.NamespaceFragment"
+            {Type = FsAstType.SynModuleDecl_NamespaceFragment
              Range = noRange
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitSynModuleOrNamespaceSig moduleOrNamespace]}
         | SynModuleSigDecl.Exception(synExceptionSig, range) ->
-            {Type = "SynModuleSigDecl.Exception"
+            {Type = FsAstType.SynModuleSigDecl_Exception
              Range = r range
              Properties = p []
              FsAstNode = ast
+             Trivias = []
+             Parent = None
              Childs = [visitSynExceptionSig synExceptionSig]}
 
     and visitSynExceptionSig(exceptionDef: SynExceptionSig): Node =
         match exceptionDef with
         | SynExceptionSig(sedr,members,range) ->
-            {Type = "SynExceptionSig"
+            {Type = FsAstType.SynExceptionSig
              Range = r range
              Properties = p []
              FsAstNode = exceptionDef
+             Trivias = []
+             Parent = None
              Childs =
                  [yield visitSynExceptionDefnRepr sedr
                   yield! (members |> List.map visitSynMemberSig)]}
@@ -1681,26 +2045,39 @@ module private Ast =
         List.map visitIdent li
 
     and visitIdent (ident: Ident) : Node =
-        { Type = "Ident"
+        { Type = FsAstType.Ident
           Range = r ident.idRange
-          Properties = Map.empty
+          Properties = []
           FsAstNode = ident
+          Trivias = []
+          Parent = None
           Childs = [] }
+
+let rec updateParent parent (n: Node) =
+    let rec node = lazy { n with Parent = parent; Childs = (childs:Lazy<_>).Value }
+    and childs = lazy (n.Childs |> List.map (updateParent (Some node.Value)))
+    node.Value
 
 let astToNode (hds: ParsedHashDirective list) (mdls: SynModuleOrNamespace list): Node =
     let children =
         [ yield! List.map Ast.visit mdls
           yield! List.map Ast.visitParsedHashDirective hds ]
-    {Type = "File"
+    {Type = FsAstType.File
      Range = None
-     Properties = Map.empty
+     Properties = []
      FsAstNode = mdls
+     Trivias = []
+     Parent = None
      Childs = children}
+    |> updateParent None
 
 let sigAstToNode (ast: SynModuleOrNamespaceSig list) : Node =
     let children = List.map Ast.visitSynModuleOrNamespaceSig ast
-    {Type = "SigFile"
+    {Type = FsAstType.SigFile
      Range = None
-     Properties = Map.empty
+     Properties = []
      FsAstNode = ast
+     Trivias = []
+     Parent = None
      Childs = children}
+    |> updateParent None
