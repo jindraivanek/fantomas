@@ -10,9 +10,10 @@
     <None Include="paket.references" />
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="RangeHelpers.fs" />
+    <Compile Include="FsAstTypes.fs" />
     <Compile Include="TriviaTypes.fs" />
-    <Compile Include="AstTransformerTypes.fs" />
     <Compile Include="AstTransformer.fs" />
+    <Compile Include="ASTree.fs" />
     <Compile Include="SourceOrigin.fs" />
     <Compile Include="Version.fs" />
     <Compile Include="Dbg.fs" />
@@ -31,6 +32,7 @@
     <Compile Include="SourceTransformer.fs" />
     <Compile Include="TriviaContext.fs" />
     <Compile Include="CodePrinter.fs" />
+    <Compile Include="AstreePrinter.fs" />
     <Compile Include="CodeFormatterImpl.fs" />
     <Compile Include="CodeFormatter.fsi" />
     <Compile Include="CodeFormatter.fs" />

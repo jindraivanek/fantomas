@@ -389,7 +389,10 @@ let formatWith ast defines formatContext config =
     let normalizedSourceCode = String.normalizeNewLine sourceCode
     let formattedSourceCode =
         let context = Fantomas.Context.Context.Create config defines normalizedSourceCode (Some ast)
-        context |> genParsedInput { ASTContext.Default with TopLevelModuleName = moduleName } ast
+        let astree = Fantomas.Context.Context.CreateASTree config defines normalizedSourceCode ast
+        //printfn "%A" astree
+        //context |> genParsedInput { ASTContext.Default with TopLevelModuleName = moduleName } ast
+        context |> AstreePrinter.genSource { ASTContext.Default with TopLevelModuleName = moduleName } astree
         |> Dbg.tee (fun ctx -> printfn "%A" ctx.WriterEvents)
         |> Context.dump
 //        |> if config.StrictMode then id 

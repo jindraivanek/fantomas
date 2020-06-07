@@ -2,6 +2,7 @@
 
 open System
 open System.Text.RegularExpressions
+open Fantomas.FsAstTypes
 open FSharp.Compiler.Range
 open FSharp.Compiler.SourceCodeServices
 open FSharp.Compiler.SyntaxTree
@@ -729,8 +730,8 @@ and genMemberFlagsForMemberBinding astContext (mf:MemberFlags) (rangeOfBindingAn
              ctx.Trivia
                 |> List.tryFind(fun { Type = t; Range = r }  ->
                     match t with
-                    | MainNode "SynMemberDefn.Member"
-                    | MainNode "SynMemberSig.Member" -> // trying to get AST trivia
+                    | MainNode FsAstType.SynMemberDefn_Member
+                    | MainNode FsAstType.SynMemberSig_Member -> // trying to get AST trivia
                         RangeHelpers.``range contains`` r rangeOfBindingAndRhs
 
                     | Token { TokenInfo = { TokenName = "MEMBER" } } -> // trying to get token trivia

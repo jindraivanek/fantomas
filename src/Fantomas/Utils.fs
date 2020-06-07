@@ -111,6 +111,11 @@ module Dict =
         let (r,x) = d.TryGetValue k
         if r then Some x else None
         
+    let ofSeq xs =
+        let d = System.Collections.Generic.Dictionary()
+        xs |> Seq.iter (fun (k, v) -> d.Add(k, v))
+        d
+        
 module List =
     let appendItem l i =
         l @ [i]

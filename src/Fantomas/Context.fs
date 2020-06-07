@@ -141,16 +141,21 @@ type internal Context =
             |> Seq.toArray
 
         let (tokens, lineCount) = TokenParser.tokenize defines content
-        let trivia =
-            match maybeAst, config.StrictMode with
-            | Some ast, false -> Trivia.collectTrivia tokens lineCount ast
-            | _ -> Context.Default.Trivia
+//        let trivia =
+//            match maybeAst, config.StrictMode with
+//            | Some ast, false -> Trivia.collectTrivia tokens lineCount ast
+//            | _ -> Context.Default.Trivia
 
         { Context.Default with 
             Config = config
             Content = content
             Positions = positions 
-            Trivia = trivia }
+            Trivia = [] }
+        
+    static member CreateASTree config defines (content : string) ast =
+        let content = String.normalizeNewLine content
+        let (tokens, lineCount) = TokenParser.tokenize defines content
+        Trivia.collectTrivia tokens lineCount ast
 
     member x.WithDummy(writerCommands, ?keepPageWidth) =
         let keepPageWidth = keepPageWidth |> Option.defaultValue false

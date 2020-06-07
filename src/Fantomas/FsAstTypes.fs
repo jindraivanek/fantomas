@@ -1,4 +1,4 @@
-module Fantomas.AstTransformerTypes
+module Fantomas.FsAstTypes
 open FSharp.Compiler.SyntaxTree
 open FSharp.Compiler.Range
 
@@ -8,7 +8,10 @@ type Id =
 
 type FsAstType =
     | Ident
-    | SynModuleOrNamespace
+    | SynModuleOrNamespace_AnonModule
+    | SynModuleOrNamespace_DeclaredNamespace
+    | SynModuleOrNamespace_GlobalNamespace
+    | SynModuleOrNamespace_NamedModule
     | SynModuleDecl_ModuleAbbrev
     | SynModuleDecl_NestedModule
     | SynModuleDecl_Let
@@ -185,10 +188,14 @@ type FsAstType =
     | SynType_StaticConstantExpr
     | SynType_StaticConstantNamed
     | SynType_AnonRecd
+    | SynValData
     | SynValInfo
     | SynArgInfo
     | ParsedHashDirective
-    | SynModuleOrNamespaceSig
+    | SynModuleOrNamespaceSig_AnonModule
+    | SynModuleOrNamespaceSig_DeclaredNamespace
+    | SynModuleOrNamespaceSig_GlobalNamespace
+    | SynModuleOrNamespaceSig_NamedModule
     | SynModuleSigDecl_ModuleAbbrev
     | SynModuleSigDecl_NestedModule
     | SynModuleSigDecl_Types
@@ -198,6 +205,105 @@ type FsAstType =
     | SynExceptionSig
     | File
     | SigFile
+module FsAstType =
+    let isSynModuleDecl = function
+        | SynModuleDecl_ModuleAbbrev
+        | SynModuleDecl_NestedModule
+        | SynModuleDecl_Let
+        | SynModuleDecl_DoExpr
+        | SynModuleDecl_Types
+        | SynModuleDecl_Exception
+        | SynModuleDecl_Open
+        | SynModuleDecl_Attributes
+        | SynModuleDecl_HashDirective
+        | SynModuleDecl_NamespaceFragment -> true
+        | _ -> false
+        
+    let isSynExpr = function
+        | SynExpr_Paren
+        | SynExpr_Quote
+        | SynExpr_Const
+        | SynExpr_Typed
+        | SynExpr_Tuple
+        | SynExpr_StructTuple
+        | SynExpr_Record
+        | SynExpr_AnonRecd
+        | SynExpr_New
+        | SynExpr_ObjExpr
+        | SynExpr_While
+        | SynExpr_For
+        | SynExpr_ForEach
+        | SynExpr_ArrayOrListOfSeqExpr
+        | SynExpr_CompExpr
+        | SynExpr_Lambda
+        | SynExpr_MatchLambda
+        | SynExpr_Match
+        | SynExpr_Do
+        | SynExpr_Assert
+        | SynExpr_App
+        | SynExpr_TypeApp
+        | SynExpr_LetOrUse
+        | SynExpr_TryWith
+        | SynExpr_TryFinally
+        | SynExpr_Lazy
+        | SynExpr_Sequential
+        | SynExpr_SequentialOrImplicitYield
+        | SynExpr_IfThenElse
+        | SynExpr_Ident
+        | SynExpr_LongIdent
+        | SynExpr_LongIdentSet
+        | SynExpr_DotGet
+        | SynExpr_DotSet
+        | SynExpr_Set
+        | SynExpr_DotIndexedGet
+        | SynExpr_DotIndexedSet
+        | SynExpr_NamedIndexedPropertySet
+        | SynExpr_DotNamedIndexedPropertySet
+        | SynExpr_TypeTest
+        | SynExpr_Upcast
+        | SynExpr_Downcast
+        | SynExpr_InferredUpcast
+        | SynExpr_InferredDowncast
+        | SynExpr_Null
+        | SynExpr_AddressOf
+        | SynExpr_JoinIn
+        | SynExpr_ImplicitZero
+        | SynExpr_YieldOrReturn
+        | SynExpr_YieldOrReturnFrom
+        | SynExpr_LetOrUseBang
+        | SynExpr_MatchBang
+        | SynExpr_DoBang
+        | SynExpr_LibraryOnlyILAssembly
+        | SynExpr_LibraryOnlyStaticOptimization
+        | SynExpr_LibraryOnlyUnionCaseFieldGet
+        | SynExpr_LibraryOnlyUnionCaseFieldSet
+        | SynExpr_ArbitraryAfterError
+        | SynExpr_FromParseError
+        | SynExpr_DiscardAfterMissingQualificationAfterDot
+        | SynExpr_Fixed -> true
+        | _ -> false
+        
+    let isSynPat = function
+        | SynPat_Const
+        | SynPat_Wild
+        | SynPat_Named
+        | SynPat_Typed
+        | SynPat_Attrib
+        | SynPat_Or
+        | SynPat_Ands
+        | SynPat_LongIdent
+        | SynPat_Tuple
+        | SynPat_Paren
+        | SynPat_ArrayOrList
+        | SynPat_Record
+        | SynPat_Null
+        | SynPat_OptionalVal
+        | SynPat_IsInst
+        | SynPat_QuoteExpr
+        | SynPat_DeprecatedCharRange
+        | SynPat_InstanceMember
+        | SynPat_FromParseError -> true
+        | _ -> false
 
 type FsAstProp =
     | Access of SynAccess

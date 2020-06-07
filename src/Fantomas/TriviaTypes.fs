@@ -47,7 +47,7 @@ with
 type TriviaIndex = TriviaIndex of int * int
 
 type TriviaNodeType =
-    | MainNode of ``type``:string
+    | MainNode of ``type``: Fantomas.FsAstTypes.FsAstType
     | Token of Token
     
 type TriviaNode =

@@ -2,6 +2,7 @@ module internal Fantomas.TriviaContext
 
 open Fantomas
 open Fantomas.Context
+open Fantomas.FsAstTypes
 open Fantomas.TriviaTypes
 open FSharp.Compiler.Range
 open FSharp.Compiler.SyntaxTree
@@ -59,7 +60,7 @@ let ``else if / elif`` (rangeOfIfThenElse: range) (ctx: Context) =
                 ctx.Trivia
                 |> List.filter (fun t ->
                     match t.Type with
-                    | MainNode("SynExpr.IfThenElse") ->
+                    | MainNode(FsAstType.SynExpr_IfThenElse) ->
                         RangeHelpers.``range contains`` rangeOfIfThenElse t.Range
                         && (RangeHelpers.``range after`` elseTrivia.Range t.Range)
                     | _ -> false
