@@ -141,7 +141,7 @@ let private findConstNodeAfter (nodes: TriviaNodeAssigner list) (range: range) =
 
 let private mapNodeToTriviaNode (node: Node) =
     node.Range
-    |> Option.map (fun range -> TriviaNodeAssigner(MainNode(node.Type), range))
+    |> Option.map (fun range -> TriviaNodeAssigner(MainNode(node.Type), range, Some node.FsAstNode))
 
 let private commentIsAfterLastTriviaNode (triviaNodes: TriviaNodeAssigner list) (range: range) =
     match List.filter isMainNodeButNotAnonModule triviaNodes with
@@ -358,6 +358,7 @@ let private addTriviaToTriviaNode triviaBetweenAttributeAndParentBinding (startO
 let private triviaNodeIsNotEmpty (triviaNode:TriviaNodeAssigner) =
     not(Seq.isEmpty triviaNode.ContentAfter) || not(Seq.isEmpty triviaNode.ContentBefore) || Option.isSome triviaNode.ContentItself
 
+
 (*
     1. Collect TriviaNode from tokens and AST
     2. Collect TriviaContent from tokens
@@ -390,17 +391,26 @@ let collectTrivia tokens lineCount (ast: ParsedInput) =
     
     let trivias = TokenParser.getTriviaFromTokens tokens lineCount
 
-    match trivias with
-    | [] -> []
-    | _ ->
-        List.fold (addTriviaToTriviaNode triviaBetweenAttributeAndParentBinding startOfSourceCode) triviaNodes trivias
-        |> List.choose (fun tn ->
-            if triviaNodeIsNotEmpty tn then
-                { Type = tn.Type
-                  Range = tn.Range
-                  ContentBefore = Seq.toList tn.ContentBefore
-                  ContentItself = tn.ContentItself
-                  ContentAfter = Seq.toList tn.ContentAfter }
-                |> Some
-            else
-                None)
+    let collectedTrivias =
+        match trivias with
+        | [] -> []
+        | _ ->
+            List.fold (addTriviaToTriviaNode triviaBetweenAttributeAndParentBinding startOfSourceCode) triviaNodes trivias
+            |> List.choose (fun tn ->
+                if triviaNodeIsNotEmpty tn then
+                    (tn.AstNode |> Option.map (fun _ -> tn.Range),
+                     { Type = tn.Type
+                       Range = tn.Range
+                       ContentBefore = Seq.toList tn.ContentBefore
+                       ContentItself = tn.ContentItself
+                       ContentAfter = Seq.toList tn.ContentAfter })
+                    |> Some
+                else
+                    None)
+    let triviaDict = 
+        collectedTrivias |> Seq.choose (function | Some r, t -> Some (toRange r, t) | _ -> None) 
+        //|> Dbg.tee (Seq.toArray >> printfn "%A")
+        |> Seq.groupBy fst |> Seq.map (fun (r, g) -> r, g |> Seq.map snd |> Seq.toList)
+        |> Map.ofSeq
+    let tokenTrivias = collectedTrivias |> List.choose (function | None, t -> Some t | _ -> None)
+    tokenTrivias, triviaDict

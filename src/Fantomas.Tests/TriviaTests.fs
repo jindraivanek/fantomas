@@ -12,6 +12,7 @@ let private toTrivia source =
     |> List.map (fun (ast, defines) ->
         let (tokens, lineCount) = TokenParser.tokenize defines source
         Trivia.collectTrivia tokens lineCount ast
+        |> fun (ts, d) -> ts @ (Map.toSeq d |> Seq.collect snd |> Seq.toList)
     )
     
 let private toTriviaWithDefines source =
@@ -20,7 +21,7 @@ let private toTriviaWithDefines source =
     astWithDefines
     |> List.map (fun (ast, defines) ->
         let (tokens, lineCount) = TokenParser.tokenize defines source
-        defines, Trivia.collectTrivia tokens lineCount ast
+        defines, (Trivia.collectTrivia tokens lineCount ast |> fun (ts, d) -> ts @ (Map.toSeq d |> Seq.collect snd |> Seq.toList))
     )
     |> Map.ofList
 

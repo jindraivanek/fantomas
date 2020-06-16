@@ -505,4 +505,4 @@ let getTriviaNodesFromTokens (tokens: Token list) =
     |> List.filter (fun t -> List.exists (fun tn -> tn = t.TokenInfo.TokenName) tokenNames || List.exists (fun tk -> tk = t.TokenInfo.CharClass) tokenKinds)
     |> List.map (fun t ->
         let range = getRangeBetween t.TokenInfo.TokenName t t
-        TriviaNodeAssigner(TriviaNodeType.Token(t), range))
+        TriviaNodeAssigner(TriviaNodeType.Token(t), range, None))

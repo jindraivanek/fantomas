@@ -126,6 +126,7 @@ type internal Context =
       /// Positions of new lines in the original source string
       Positions : int []; 
       Trivia : TriviaNode list
+      Metadata : Map<TriviaTypes.Range, TriviaNode list>
       RecordBraceStart: int list }
 
     /// Initialize with a string writer and use space as delimiter
@@ -137,6 +138,7 @@ type internal Context =
           Content = ""
           Positions = [||]
           Trivia = []
+          Metadata = Map.empty
           RecordBraceStart = [] }
 
     static member Create config defines (content : string) maybeAst =
@@ -148,17 +150,21 @@ type internal Context =
             |> Seq.toArray
 
         let (tokens, lineCount) = TokenParser.tokenize defines content
-        let trivia =
+        let (trivia, metadata) =
             match maybeAst, config.StrictMode with
             | Some ast, false -> Trivia.collectTrivia tokens lineCount ast
-            | _ -> Context.Default.Trivia
+            | _ -> Context.Default.Trivia, Context.Default.Metadata
 
         { Context.Default with 
             Config = config
             Content = content
             Positions = positions 
-            Trivia = trivia }
+            Trivia = trivia
+            Metadata = metadata }
 
+    member x.AllTrivia = x.Trivia @ (Map.toSeq x.Metadata |> Seq.collect snd |> Seq.toList) |> List.sortBy (fun t -> t.Range.StartLine, t.Range.StartColumn)
+    member x.TriviaOnRange (r:range) = (x.Metadata |> Map.tryFind (toRange r) |> Option.defaultValue []) @ (x.Trivia |> List.filter (fun tn -> tn.Range = r))  |> List.sortBy (fun t -> t.Range.StartLine, t.Range.StartColumn)
+    
     member x.WithDummy(writerCommands, ?keepPageWidth) =
         let keepPageWidth = keepPageWidth |> Option.defaultValue false
         let mkModel m = { m with Mode = Dummy; Lines = [String.replicate x.WriterModel.Column " "]; WriteBeforeNewline = "" }
@@ -755,16 +761,14 @@ let internal printTriviaContent (c: TriviaContent) (ctx: Context) =
 
 let private removeNodeFromContext triviaNode (ctx: Context) =
     let newNodes = List.filter (fun tn -> tn <> triviaNode) ctx.Trivia
-    { ctx with Trivia = newNodes }
+    let metadata = ctx.Metadata |> Map.map (fun _ ts -> List.filter (fun tn -> tn <> triviaNode) ts)
+    { ctx with Trivia = newNodes; Metadata = metadata }
 
 let internal printContentBefore triviaNode =
     // Make sure content is not being printed twice.
     let removeBeforeContentOfTriviaNode =
-        fun (ctx:Context) ->
-            let trivia =
-                ctx.Trivia
-                |> List.map (fun tn ->
-                    let contentBefore =
+        let mapper tn =
+            let contentBefore =
                         tn.ContentBefore
                         |> List.filter(fun cb ->
                             match cb with
@@ -774,34 +778,38 @@ let internal printContentBefore triviaNode =
                             | IdentOperatorAsWord _ ->
                                 true
                             | _ -> false)
-                    if tn = triviaNode then
-                        { tn with ContentBefore = contentBefore }
-                    else
-                        tn
-                ) 
-            { ctx with Trivia = trivia }
+            if tn = triviaNode then
+                { tn with ContentBefore = contentBefore }
+            else
+                tn
+        fun (ctx:Context) ->
+            let trivia =
+                ctx.Trivia
+                |> List.map mapper
+            let metadata = ctx.Metadata |> Map.map (fun _ ts -> List.map mapper ts)
+            { ctx with Trivia = trivia; Metadata = metadata }
         
     col sepNone triviaNode.ContentBefore printTriviaContent +> removeBeforeContentOfTriviaNode
 
 let internal printContentAfter triviaNode =
     col sepNone triviaNode.ContentAfter printTriviaContent
 
-let private findTriviaMainNodeFromRange nodes (range:range) =
-    nodes
-    |> List.tryFind(fun n ->
-        Trivia.isMainNode n && RangeHelpers.rangeEq n.Range range)
+let private findTriviaMainNodeFromRange (ctx: Context) (range:range) =
+    ctx.Metadata |> Dict.tryGet (toRange range) |> Option.bind List.tryHead
 
-let private findTriviaMainNodeOrTokenOnStartFromRange nodes (range:range) =
-    nodes
-    |> List.tryFind(fun n ->
-        Trivia.isMainNode n && RangeHelpers.rangeEq n.Range range
-        || Trivia.isToken n && RangeHelpers.rangeStartEq n.Range range)
+let private findTriviaMainNodeOrTokenOnStartFromRange (ctx: Context) (range:range) =
+    ctx.Metadata |> Dict.tryGet (toRange range) |> Option.bind List.tryHead |> Option.orElseWith (fun () ->
+        ctx.Trivia
+        |> List.tryFind(fun n ->
+            Trivia.isMainNode n && RangeHelpers.rangeEq n.Range range
+            || Trivia.isToken n && RangeHelpers.rangeStartEq n.Range range))
 
-let private findTriviaMainNodeOrTokenOnEndFromRange nodes (range:range) =
-    nodes
-    |> List.tryFind(fun n ->
-        Trivia.isMainNode n && RangeHelpers.rangeEq n.Range range
-        || Trivia.isToken n && RangeHelpers.rangeEndEq n.Range range)
+let private findTriviaMainNodeOrTokenOnEndFromRange (ctx: Context) (range:range) =
+    ctx.Metadata |> Dict.tryGet (toRange range) |> Option.bind List.tryHead |> Option.orElseWith (fun () ->
+        ctx.Trivia
+        |> List.tryFind(fun n ->
+            Trivia.isMainNode n && RangeHelpers.rangeEq n.Range range
+            || Trivia.isToken n && RangeHelpers.rangeEndEq n.Range range))
 
 let private findTriviaTokenFromRange nodes (range:range) =
     nodes
@@ -820,7 +828,13 @@ let internal enterNodeWith f x (ctx: Context) =
     | Some triviaNode ->
         (printContentBefore triviaNode) ctx
     | None -> ctx
-let internal enterNode (range: range) (ctx: Context) = enterNodeWith findTriviaMainNodeOrTokenOnStartFromRange range ctx
+let internal enterNodeWithCtx f x (ctx: Context) =
+    match f ctx x with
+    | Some triviaNode ->
+        (printContentBefore triviaNode) ctx
+    | None -> ctx
+
+let internal enterNode (range: range) (ctx: Context) = enterNodeWithCtx findTriviaMainNodeOrTokenOnStartFromRange range ctx
 let internal enterNodeToken (range: range) (ctx: Context) = enterNodeWith findTriviaTokenFromRange range ctx
 let internal enterNodeTokenByName (range: range) (tokenName:string) (ctx: Context) = enterNodeWith (findTriviaTokenFromName range) tokenName ctx
 
@@ -829,7 +843,13 @@ let internal leaveNodeWith f x (ctx: Context) =
     | Some triviaNode ->
         ((printContentAfter triviaNode) +> (removeNodeFromContext triviaNode)) ctx
     | None -> ctx
-let internal leaveNode (range: range) (ctx: Context) = leaveNodeWith findTriviaMainNodeOrTokenOnEndFromRange range ctx
+let internal leaveNodeWithCtx f x (ctx: Context) =
+    match f ctx x with
+    | Some triviaNode ->
+        ((printContentAfter triviaNode) +> (removeNodeFromContext triviaNode)) ctx
+    | None -> ctx
+
+let internal leaveNode (range: range) (ctx: Context) = leaveNodeWithCtx findTriviaMainNodeOrTokenOnEndFromRange range ctx
 let internal leaveNodeToken (range: range) (ctx: Context) = leaveNodeWith findTriviaTokenFromRange range ctx
 let internal leaveNodeTokenByName (range: range) (tokenName:string) (ctx: Context) = leaveNodeWith (findTriviaTokenFromName range) tokenName ctx
     
@@ -914,7 +934,7 @@ let private hasDirectiveBefore (trivia: TriviaContent list) =
         | _ -> false)
 
 let internal sepConsideringTriviaContentBefore sepF (range: range) ctx =
-    match findTriviaMainNodeFromRange ctx.Trivia range with
+    match findTriviaMainNodeFromRange ctx range with
     | Some({ ContentBefore = (Comment(BlockComment(_,false,_)))::_ }) ->
         sepF ctx
     | Some({ ContentBefore = contentBefore }) when (hasPrintableContent contentBefore) ->
@@ -928,21 +948,21 @@ let internal sepNlnConsideringTriviaContentBeforeWithAttributes (ownRange:range)
         yield ownRange
         yield! attributeRanges
     }
-    |> Seq.choose (findTriviaMainNodeFromRange ctx.Trivia)
+    |> Seq.choose (findTriviaMainNodeFromRange ctx)
     |> Seq.exists (fun ({ ContentBefore = contentBefore }) -> hasPrintableContent contentBefore)
     |> fun hasContentBefore ->
         if hasContentBefore then ctx else sepNln ctx
         
 let internal sepNlnForEmptyModule (moduleRange:range) ctx =    
-    match findTriviaMainNodeOrTokenOnStartFromRange ctx.Trivia moduleRange with
+    match findTriviaMainNodeOrTokenOnStartFromRange ctx moduleRange with
     | Some node when hasPrintableContent node.ContentBefore || hasPrintableContent node.ContentAfter ->
         ctx
     | _ ->
         sepNln ctx
 
-let internal sepNlnForEmptyNamespace (namespaceRange:range) ctx =
+let internal sepNlnForEmptyNamespace (namespaceRange:range) (ctx: Context) =
     let emptyNamespaceRange = mkRange namespaceRange.FileName (mkPos 0 0) namespaceRange.End
-    match TriviaHelpers.findInRange ctx.Trivia emptyNamespaceRange with
+    match TriviaHelpers.findInRange ctx.AllTrivia emptyNamespaceRange with
     | Some node when hasPrintableContent node.ContentBefore || hasPrintableContent node.ContentAfter ->
         ctx
     | _ ->
@@ -1056,7 +1076,7 @@ let internal genTriviaBeforeClausePipe (rangeOfClause:range) ctx =
     <| ctx
     
 let internal hasLineCommentAfterInfix (rangePlusInfix: range) (ctx: Context) =
-    findTriviaMainNodeFromRange ctx.Trivia rangePlusInfix
+    findTriviaMainNodeFromRange ctx rangePlusInfix
     |> Option.bind (fun trivia ->
         trivia.ContentAfter
         |> List.map (fun ca ->

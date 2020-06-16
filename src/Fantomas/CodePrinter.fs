@@ -286,7 +286,7 @@ and genSigModuleDeclList astContext node =
 and genModuleDecl astContext (node: SynModuleDecl) =
     match node with
     | Attributes(ats) ->
-        fun ctx ->
+        fun (ctx: Context) ->
             let attributesExpr =
                 // attributes can have trivia content before or after
                 // we do extra detection to ensure no additional newline is introduced
@@ -300,7 +300,7 @@ and genModuleDecl astContext (node: SynModuleDecl) =
                         TriviaHelpers.``has content after after that matches``
                             (fun tn -> tn.Range = a.Range)
                             (function | Directive(_) -> true | _ -> false)
-                            ctx.Trivia
+                            (ctx.TriviaOnRange a.Range)
                     (hasContentAfter, prevExpr +> expr)
                 ) (true, sepNone) ats
                 |> snd
@@ -428,7 +428,7 @@ and genAttributes astContext (ats: SynAttributes) =
                 TriviaHelpers.``has content after that ends with``
                     (fun t -> t.Range = a.Range)
                     (function | Directive(_) | Newline -> true | _ -> false)
-                    ctx.Trivia
+                    (ctx.TriviaOnRange a.Range)
             let chain =
                 acc +>
                 (genAttributesCore astContext a.Attributes |> genTrivia a.Range)
@@ -481,7 +481,7 @@ and genExprSepEqPrependType astContext (pat:SynPat) (e: SynExpr) (valInfo:SynVal
                 addSpaceAfterGenericConstructBeforeColon
             | _ -> sepNone
 
-        let hasLineCommentBeforeColon = TriviaHelpers.``has line comment before`` t.Range ctx.Trivia
+        let hasLineCommentBeforeColon = TriviaHelpers.``has line comment before`` t.Range (ctx.TriviaOnRange t.Range)
 
         let genCommentBeforeColon ctx =
             (ifElse hasLineCommentBeforeColon indent sepNone
@@ -506,7 +506,7 @@ and genExprSepEqPrependType astContext (pat:SynPat) (e: SynExpr) (valInfo:SynVal
         let genE =
             match e with
             | MultilineString(_)
-            | _ when (TriviaHelpers.``has content itself that is multiline string`` e.Range ctx.Trivia) ->
+            | _ when (TriviaHelpers.``has content itself that is multiline string`` e.Range (ctx.TriviaOnRange e.Range)) ->
                 genExpr astContext e
             | _ -> isShortExpressionOrAddIndentAndNewline maxWidth (genExpr astContext e)
 
@@ -728,7 +728,7 @@ and genMemberFlags astContext (mf:MemberFlags) =
 and genMemberFlagsForMemberBinding astContext (mf:MemberFlags) (rangeOfBindingAndRhs: range) =
     fun ctx ->
          let keywordFromTrivia =
-             ctx.Trivia
+             (ctx.Trivia @ (Map.toSeq ctx.Metadata |> Seq.collect snd |> Seq.toList))
                 |> List.tryFind(fun { Type = t; Range = r }  ->
                     match t with
                     | MainNode "SynMemberDefn.Member"
@@ -882,7 +882,7 @@ and genExpr astContext synExpr =
         fun ctx ->
             // If an array or list has any form of line comments inside them, they cannot fit on a single line
             // check for any comments inside the range of the node
-            if (TriviaHelpers.``has line comments inside`` alNode.Range ctx.Trivia) then
+            if (TriviaHelpers.``has line comments inside`` alNode.Range ctx.AllTrivia) then
                 multilineExpression ctx
             else
                 isShortExpression ctx.Config.MaxArrayOrListWidth shortExpression multilineExpression ctx
@@ -1149,7 +1149,7 @@ and genExpr astContext synExpr =
             let hasLineCommentAfterExpression (currentLine) =
                 let findTrivia tn = tn.Range.EndLine = currentLine
                 let predicate = function | Comment _ -> true | _ -> false
-                TriviaHelpers.``has content after after that matches`` findTrivia predicate ctx.Trivia
+                TriviaHelpers.``has content after after that matches`` findTrivia predicate ctx.AllTrivia
 
             let lineCommentsAfter =
                 [ yield (e.Range.EndLine, hasLineCommentAfterExpression e.Range.EndLine)
@@ -1374,7 +1374,7 @@ and genExpr astContext synExpr =
             let hasElfis = not (List.isEmpty elfis)
 
             let commentAfterKeyword keyword rangePredicate (ctx: Context) =
-                ctx.Trivia
+                ctx.AllTrivia
                 |> TriviaHelpers.``has content after after that matches``
                     (fun t ->
                         let ttt = TriviaHelpers.``is token of type`` keyword t
@@ -1386,7 +1386,7 @@ and genExpr astContext synExpr =
                 TriviaHelpers.``has content after after that matches``
                     (fun tn -> tn.Range = e1.Range)
                     (function | Comment(LineCommentAfterSourceCode(_)) -> true | _ -> false)
-                    ctx.Trivia
+                    (ctx.TriviaOnRange e1.Range)
 
             let hasCommentAfterIfKeyword =
                 commentAfterKeyword "IF" (RangeHelpers.``have same range start`` synExpr.Range) ctx
@@ -1395,7 +1395,7 @@ and genExpr astContext synExpr =
                 TriviaHelpers.``has content after after that matches``
                     (fun tn -> tn.Range = range)
                     (function | Comment(LineCommentAfterSourceCode(_)) -> true | _ -> false)
-                    ctx.Trivia
+                    (ctx.TriviaOnRange range)
 
             let hasCommentAfterIfBranchExpr = ``has line comment after source code for range`` e2.Range
 
@@ -1430,7 +1430,7 @@ and genExpr astContext synExpr =
                     TriviaHelpers.``has content after after that matches``
                         (fun tn -> tn.Range = elf1.Range)
                         (function | Comment(LineCommentAfterSourceCode(_)) -> true | _ -> false)
-                        ctx.Trivia
+                        (ctx.TriviaOnRange elf1.Range)
                 let hasCommentAfterThenKeyword =
                     commentAfterKeyword "THEN" (RangeHelpers.``range contains`` fullRange) ctx
 
@@ -1492,7 +1492,7 @@ and genExpr astContext synExpr =
                     TriviaHelpers.``has content after after that matches``
                         (fun tn -> tn.Range = elf1.Range)
                         (function | Comment(LineCommentAfterSourceCode(_)) -> true | _ -> false)
-                        ctx.Trivia
+                        (ctx.TriviaOnRange elf1.Range)
 
                 let elifExpr =
                     TriviaContext.``else if / elif`` fullRange
@@ -1917,7 +1917,7 @@ and genTypeDefn astContext (TypeDef(ats, px, ao, tds, tcs, tdr, ms, s, preferPos
         let sepNlnBasedOnTrivia =
             fun (ctx: Context) ->
                 let trivia =
-                    ctx.Trivia
+                    (ctx.TriviaOnRange unionNode.Range)
                     |> List.tryFind (fun t -> t.Range = unionNode.Range && not (List.isEmpty t.ContentBefore))
 
                 match trivia with
@@ -2117,7 +2117,7 @@ and genSigTypeDefn astContext (SigTypeDef(ats, px, ao, tds, tcs, tdr, ms, s, pre
         let sepNlnBasedOnTrivia =
             fun (ctx: Context) ->
                 let trivia =
-                    ctx.Trivia
+                    (ctx.TriviaOnRange unionNode.Range)
                     |> List.tryFind (fun t -> t.Range = unionNode.Range && not (List.isEmpty t.ContentBefore))
 
                 match trivia with
@@ -2315,7 +2315,7 @@ and genEnumCase astContext (EnumCase(ats, px, _, (_,_)) as node) =
             match node with
             | EnumCase(_, _, identInAST, (c,r)) ->
                 let ident =
-                    match TriviaHelpers.``has content itself is ident between ticks`` r ctx.Trivia with
+                    match TriviaHelpers.``has content itself is ident between ticks`` r ctx.AllTrivia with
                     | Some identBetweenTicks -> identBetweenTicks
                     | None -> identInAST
                 !- ident +> !- " = " +> genConst c r
@@ -2796,7 +2796,7 @@ and genConst (c:SynConst) (r:range) =
     | SynConst.Unit ->
             fun (ctx: Context) ->
                 let innerComments =
-                    ctx.Trivia
+                    ctx.AllTrivia
                     |> List.tryFind (fun t ->
                         let rangeMatch = t.Range.StartLine = r.StartLine && t.Range.StartColumn = r.StartColumn
                         match rangeMatch, t.Type with
@@ -2831,7 +2831,7 @@ and genConst (c:SynConst) (r:range) =
     | SynConst.String(s,_) ->
         fun (ctx: Context) ->
             let trivia =
-                ctx.Trivia
+                (ctx.TriviaOnRange r)
                 |> List.tryFind (fun tv -> tv.Range = r)
 
             let triviaStringContent =
@@ -2855,7 +2855,7 @@ and genConst (c:SynConst) (r:range) =
             <| ctx
     | SynConst.Char(c) ->
         fun (ctx: Context) ->
-            let charContentFromTrivia = TriviaHelpers.``get CharContent`` r ctx.Trivia
+            let charContentFromTrivia = TriviaHelpers.``get CharContent`` r (ctx.TriviaOnRange r)
             let expr =
                 match charContentFromTrivia with
                 | Some content -> !- content
@@ -2873,7 +2873,7 @@ and genConst (c:SynConst) (r:range) =
     |> genTrivia r
 and genConstNumber (c:SynConst) (r: range) =
     fun (ctx: Context) ->
-        ctx.Trivia
+        (ctx.TriviaOnRange r)
         |> List.tryFind (fun t -> t.Range = r)
         |> Option.bind(fun tn ->
             match tn.ContentItself with | Some(Number(n)) -> Some n | _ -> None
@@ -2904,7 +2904,7 @@ and genConstNumber (c:SynConst) (r: range) =
 and genConstBytes (bytes: byte []) (r: range) =
     fun (ctx: Context) ->
         let trivia =
-            ctx.Trivia
+            (ctx.TriviaOnRange r)
             |> List.tryFind(fun t -> t.Range = r)
             |> Option.bind (fun tv ->
                 match tv.ContentItself with
@@ -2918,16 +2918,16 @@ and genConstBytes (bytes: byte []) (r: range) =
         <| ctx
 
 and genTrivia (range: range) f ctx =
-    if List.isEmpty ctx.Trivia then
-        f ctx
-    else
+    // if List.isEmpty ctx.Trivia then
+    //     f ctx
+    // else
         (enterNode range +> f +> leaveNode range) ctx
 
 and infixOperatorFromTrivia range fallback (ctx: Context) =
     // by specs, section 3.4 https://fsharp.org/specs/language-spec/4.1/FSharpSpec-4.1-latest.pdf#page=24&zoom=auto,-137,312
     let validIdentRegex = """^(_|\p{L}|\p{Nl})([_'0-9]|\p{L}|\p{Nl}\p{Pc}|\p{Mn}|\p{Mc}|\p{Cf})*$"""
     let isValidIdent x = Regex.Match(x, validIdentRegex).Success
-    ctx.Trivia
+    (ctx.TriviaOnRange range)
     |> List.choose(fun t ->
         match t.Range = range with
         | true ->

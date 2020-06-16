@@ -5,16 +5,15 @@ open Fantomas.TriviaTypes
 
 [<RequireQualifiedAccess>]
 module internal TriviaHelpers =
-    let findByRange (trivia: TriviaNode list) (range: range) =
-        trivia
-        |> List.tryFind (fun t -> t.Range = range)
+    let findByRange (metadata: Map<_,TriviaNode list>) (range: range) =
+        metadata |> Dict.tryGet (toRange range) |> Option.bind List.tryHead
     
     let findInRange (trivia: TriviaNode list) (range:range) =
         trivia
         |> List.tryFind (fun t -> RangeHelpers.``range contains`` range t.Range)
 
-    let findFirstContentBeforeByRange (trivia: TriviaNode list) (range: range) =
-        findByRange trivia range
+    let findFirstContentBeforeByRange metadata (range: range) =
+        findByRange metadata range
         |> Option.bind (fun t -> t.ContentBefore |> List.tryHead)
 
     let ``has content after after that matches`` (findTrivia: TriviaNode -> bool) (contentAfter: TriviaContent -> bool) (trivia: TriviaNode list) =
