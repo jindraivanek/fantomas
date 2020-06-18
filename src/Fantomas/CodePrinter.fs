@@ -1374,7 +1374,7 @@ and genExpr astContext synExpr =
             let hasElfis = not (List.isEmpty elfis)
 
             let commentAfterKeyword keyword rangePredicate (ctx: Context) =
-                ctx.AllTrivia
+                ctx.Trivia
                 |> TriviaHelpers.``has content after after that matches``
                     (fun t ->
                         let ttt = TriviaHelpers.``is token of type`` keyword t
